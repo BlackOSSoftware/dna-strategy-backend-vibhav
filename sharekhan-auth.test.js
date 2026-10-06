@@ -38,6 +38,15 @@ test('token exchange sends swapped encrypted request and keeps access token serv
   assert.notEqual(sent.requestToken,raw);
   assert.equal(sent.state,'state-1');
 });
+test('credentials can be replaced without returning the secure key',()=>{
+  const auth=new SharekhanAuth({apiKey:'demo-key',secureKey:key,customerId:'111'});
+  const status=auth.updateCredentials({apiKey:'new-key-value',secureKey:key,customerId:'222'});
+  assert.equal(auth.config.apiKey,'new-key-value');
+  assert.equal(auth.config.customerId,'222');
+  assert.equal(status.apiKeyHint,'••••alue');
+  assert.equal(JSON.stringify(status).includes(key),false);
+  assert.throws(()=>auth.updateCredentials({secureKey:'short'}),/32 bytes/);
+});
 test('invalid Secure Key is not shown as ready',()=>{
   const auth=new SharekhanAuth({apiKey:'demo-key',secureKey:'x'.repeat(33)});
   assert.equal(auth.status().configured,false);

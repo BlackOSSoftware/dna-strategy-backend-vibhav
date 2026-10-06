@@ -143,6 +143,16 @@ async function liveOptionOrder(data){
     throw error;
   }
 }
+function writeSharekhanEnv(config){
+  const file=path.join(root,'.env');
+  const keys={SHAREKHAN_API_KEY:config.apiKey||'',SHAREKHAN_SECURE_KEY:config.secureKey||'',SHAREKHAN_CUSTOMER_ID:config.customerId||'',SHAREKHAN_VENDOR_KEY:config.vendorKey||'',SHAREKHAN_VERSION_ID:config.versionId||''};
+  const lines=fs.existsSync(file)?fs.readFileSync(file,'utf8').split(/\r?\n/):[];
+  const seen=new Set();
+  const next=lines.map(line=>{const match=line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);if(!match||!(match[1] in keys))return line;seen.add(match[1]);return `${match[1]}=${keys[match[1]]}`;}).filter((line,index,all)=>line!==''||index<all.length-1);
+  for(const [key,value] of Object.entries(keys))if(!seen.has(key))next.push(`${key}=${value}`);
+  fs.writeFileSync(file,`${next.join('\n').replace(/\n*$/,'')}\n`);
+  for(const [key,value] of Object.entries(keys))process.env[key]=value;
+}
 async function body(req){let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>100000)throw Error('Request too large');}return raw?JSON.parse(raw):{};}
 const server=http.createServer(async(req,res)=>{
   try {
@@ -175,6 +185,7 @@ const server=http.createServer(async(req,res)=>{
           bookCache={at:0,value:null};
           break;
         case '/api/sharekhan/logout':result=broker.logout();await store.clearBrokerSession();bookCache={at:0,value:null};break;
+        case '/api/sharekhan/credentials':result=broker.updateCredentials(data);await store.saveSharekhanCredentials(broker.config);writeSharekhanEnv(broker.config);await store.clearBrokerSession();bookCache={at:0,value:null};break;
         case '/api/config': result=engine.configure(await assertInstrument(data));break;
         case '/api/arm': if(data.mode==='live')throw Error('Live order routing requires broker fill reconciliation; use paper mode');result=engine.arm(data.direction,'paper',await resolveOption(engine.config,data.direction,data.spot));break;
         case '/api/start': if(data.mode==='live')throw Error('Live order routing requires broker fill reconciliation; use paper mode');result=engine.start(data.direction,'paper',await resolveOption(engine.config,data.direction,data.spot));break;
@@ -194,8 +205,20 @@ const server=http.createServer(async(req,res)=>{
     reply(res,404,{error:'Not found'});
   }catch(e){reply(res,400,{error:e.message});}
 });
+function applySharekhanProcessEnv(config){
+  process.env.SHAREKHAN_API_KEY=config.apiKey||'';
+  process.env.SHAREKHAN_SECURE_KEY=config.secureKey||'';
+  process.env.SHAREKHAN_CUSTOMER_ID=config.customerId||'';
+  process.env.SHAREKHAN_VENDOR_KEY=config.vendorKey||'';
+  process.env.SHAREKHAN_VERSION_ID=config.versionId||'';
+}
 async function start(){
   await store.connect();
+  try {
+    const saved=await store.loadSharekhanCredentials();
+    if(saved?.apiKey&&saved?.secureKey){broker.useSavedCredentials(saved);applySharekhanProcessEnv(broker.config);}
+    else if(broker.config.apiKey&&broker.config.secureKey)await store.saveSharekhanCredentials(broker.config);
+  }catch(error){console.warn('Sharekhan credentials stayed on the saved server configuration');}
   try {
     const session=await store.loadBrokerSession();
     if(session){

@@ -77,6 +77,26 @@ export async function verifySharekhanSession({apiKey,accessToken,customerId,fetc
 
 export class SharekhanAuth {
   constructor(config={},deps={}) { this.config=config; this.pending=null; this.session=null; this.connectionStatus='disconnected'; this.lastCheck=0; this.lastError=null; this.exchange=deps.exchange||exchangeAccessToken; this.probe=deps.probe||verifySharekhanSession; }
+  useSavedCredentials(saved = {}) {
+    const secureKey = normalize(saved.secureKey);
+    if (saved.apiKey) this.config.apiKey = normalize(saved.apiKey);
+    if (secureKey) { secureKeyBytes(secureKey); this.config.secureKey = secureKey; }
+    this.config.customerId = normalize(saved.customerId);
+    this.config.vendorKey = normalize(saved.vendorKey);
+    this.config.versionId = normalize(saved.versionId);
+    return this.config;
+  }
+  updateCredentials(input = {}) {
+    this.useSavedCredentials({
+      apiKey: normalize(input.apiKey) || this.config.apiKey,
+      secureKey: normalize(input.secureKey) || this.config.secureKey,
+      customerId: input.customerId != null ? input.customerId : this.config.customerId,
+      vendorKey: input.vendorKey != null ? input.vendorKey : this.config.vendorKey,
+      versionId: input.versionId != null ? input.versionId : this.config.versionId
+    });
+    if (!this.config.apiKey || !this.config.secureKey) throw Error('Sharekhan API Key and Secure Key are required');
+    return this.logout();
+  }
   credentialError() {
     if(!this.config.apiKey||!this.config.secureKey)return 'Sharekhan API Key and Secure Key are required in backend/.env';
     try{secureKeyBytes(this.config.secureKey);return null}catch{return 'Sharekhan Secure Key must be exactly 32 bytes. Recopy it from the same API app as the API Key.'}
