@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Strategy} from './engine.js';
+import {Strategy, sessionSignal} from './engine.js';
 
 function seed(s,side='buy') {
   s.arm(side);
@@ -73,6 +73,31 @@ test('entries stay inside the strategy start and end time',()=>{
   for(let i=0;i<6;i++)s.candle({time:new Date(late+i*900000).toISOString(),open:100,high:104,low:99,close:103});
   assert.equal(s.pending,null);
   assert.throws(()=>s.configure({strategyStart:'15:30',strategyEnd:'09:15'}),/after the start/);
+});
+test('existing mode keeps the current contract across a new day',()=>{
+  const s=new Strategy();
+  s.start('short','paper',{label:'NIFTY 22650 PE',scripCode:'1',strike:22650,optionType:'PE'},'existing');
+  assert.equal(s.tradeMode,'existing');
+  assert.equal(s.option.strike,22650);
+  const next=Date.parse(`${s.day}T18:35:00Z`);
+  s.candle({time:new Date(next).toISOString(),open:100,high:101,low:99,close:100});
+  assert.equal(s.status,'running');
+  assert.equal(s.option.strike,22650);
+});
+test('live mode waits for a signal that forms after start',()=>{
+  const s=new Strategy();
+  s.start('short','paper',null,'live');
+  assert.equal(s.option,null);
+  assert.equal(s.signal,null);
+  const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:start+6*900,open:100,high:101,low:96,close:97,smaClose:100,smaOpen:100});
+  candles.push({time:start+7*900,open:97,high:98,low:95,close:96,smaClose:99,smaOpen:99});
+  assert.equal(sessionSignal(candles,{direction:'short',after:(start+8*900)*1000}),null);
+  const found=sessionSignal(candles,{direction:'short',after:start*1000});
+  assert.equal(found.spot,96);
+  assert.equal(found.side,'short');
 });
 test('start and stop stay available after a kill',()=>{
   const s=new Strategy();

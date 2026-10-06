@@ -18,12 +18,43 @@ const clockMinutes = value => { const clock = clockValue(value); return clock ? 
 const round = (n, tick) => Math.round(n / tick) * tick;
 const fmt = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const day = ts => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date(ts));
+const istMinutes = ts => {
+  const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).formatToParts(new Date(ts));
+  const hour = parts.find(part => part.type === 'hour')?.value;
+  const minute = parts.find(part => part.type === 'minute')?.value;
+  return (hour === '24' ? 0 : Number(hour)) * 60 + Number(minute);
+};
+
+export function sessionSignal(candles, {direction = 'buy', after = 0, strategyStart = '09:15', strategyEnd = '15:15'} = {}) {
+  const start = clockMinutes(strategyStart) ?? 9 * 60 + 15;
+  const end = clockMinutes(strategyEnd) ?? 15 * 60 + 15;
+  const afterSec = after > 1e12 ? Math.floor(after / 1000) : Math.floor(Number(after) || 0);
+  let level = null;
+  for (let index = 0; index < candles.length; index++) {
+    const candle = candles[index];
+    const time = Number(candle.time);
+    if (!Number.isFinite(time)) continue;
+    const minute = istMinutes(time * 1000);
+    if (minute < start || minute >= end) continue;
+    if (level && (direction === 'short' ? candle.low < level.low : candle.high > level.high)) {
+      return {day:day(time * 1000), side:direction, spot:direction === 'short' ? level.low : level.high, time};
+    }
+    const closed = index < candles.length - 1 || Date.now() >= time * 1000 + 15 * 60 * 1000;
+    if (!closed || candle.smaClose == null || candle.smaOpen == null || level) continue;
+    if (time + 15 * 60 <= afterSec) continue;
+    const buy = direction !== 'short' && candle.close > candle.open && candle.close > candle.smaClose && candle.close > candle.smaOpen;
+    const sell = direction === 'short' && candle.close < candle.open && candle.close < candle.smaClose && candle.close < candle.smaOpen;
+    if (buy) level = {high:candle.high};
+    if (sell) level = {low:candle.low};
+  }
+  return null;
+}
 
 export class Strategy {
   constructor(config = {}) { this.config = {...defaults, ...config}; this.reset(); }
   reset() {
-    this.direction = null; this.status = 'idle'; this.mode = 'paper'; this.day = null;
-    this.candles = []; this.pending = null; this.legs = []; this.history = [];
+    this.direction = null; this.status = 'idle'; this.mode = 'paper'; this.tradeMode = 'existing'; this.day = null;
+    this.candles = []; this.pending = null; this.signal = null; this.startedAt = null; this.legs = []; this.history = [];
     this.events = []; this.realized = 0; this.lastPrice = null; this.level = 0;
     this.highWater = null; this.lowWater = null; this.sharedStop = null;
     this.haltReason = null; this.nextId = 1; this.firstEntry = null; this.trailAnchor = null; this.option = null;
@@ -64,17 +95,21 @@ export class Strategy {
     const end = clockMinutes(this.config.strategyEnd) ?? clockMinutes(defaults.strategyEnd);
     return now !== null && now >= start && now < end;
   }
-  start(direction, mode = 'paper', contract = null) {
+  start(direction, mode = 'paper', contract = null, tradeMode = null) {
     if (!['buy','short'].includes(direction)) throw Error('Choose buy or short');
     if (this.legs.length) throw Error('Open positions must be closed before starting again');
-    if (this.status === 'running' && this.direction === direction) return this.snapshot();
-    if (this.status === 'paused' && this.direction === direction) return this.resume();
-    if (this.status !== 'idle' || this.direction || this.level) {
-      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionOrders:this.optionOrders, optionPrice:this.optionPrice};
+    const nextTrade = tradeMode === 'live' ? 'live' : 'existing';
+    const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || order.brokerOrderId);
+    if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
+    if (this.status === 'running' && this.direction === direction && this.tradeMode === nextTrade) return this.snapshot();
+    if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade) { this.mode = mode; return this.resume(); }
+    if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
+      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice};
+      if (nextTrade === 'existing') { keep.option = contract || this.option; keep.optionOrders = this.optionOrders; }
       this.reset();
       Object.assign(this, keep);
     }
-    return this.arm(direction, mode, contract);
+    return this.arm(direction, mode, nextTrade === 'live' ? null : (contract || this.option), nextTrade);
   }
   stop() {
     if (this.status === 'idle') return this.snapshot();
@@ -85,13 +120,18 @@ export class Strategy {
     this.log('system','Strategy stopped');
     return this.snapshot();
   }
-  arm(direction, mode = 'paper', contract = null) {
+  arm(direction, mode = 'paper', contract = null, tradeMode = 'existing') {
     if (!['buy','short'].includes(direction)) throw Error('Choose buy or short');
     if (this.status === 'killed') throw Error('Killed strategy can only reset on a new day');
     if (this.direction && this.direction !== direction) throw Error('Direction is locked for the day');
     if (this.level || this.pending) throw Error('Entry already used; no re-entry today');
-    this.day = this.day || day(Date.now()); this.direction = direction; this.mode = mode; this.option = contract || null;
-    this.status = 'running'; this.log('system',`${direction.toUpperCase()} armed in ${mode} mode${this.option ? ` · ${this.option.label} ${this.option.expiry}` : ''}`); return this.snapshot();
+    this.tradeMode = tradeMode === 'live' ? 'live' : 'existing';
+    this.day = this.day || day(Date.now()); this.direction = direction; this.mode = mode;
+    if (this.tradeMode === 'live') { this.option = null; this.optionOrders = []; this.signal = null; this.startedAt = Date.now(); }
+    else this.option = contract || this.option || null;
+    this.status = 'running';
+    const label = this.tradeMode === 'live' ? 'LIVE mode · waiting for the next signal' : `EXISTING mode${this.option ? ` · ${this.option.label} ${this.option.expiry}` : ''}`;
+    this.log('system',`${direction.toUpperCase()} armed in ${mode} · ${label}`); return this.snapshot();
   }
   pause() { if (this.status === 'running') { this.status = 'paused'; this.pending = null; this.log('system','Paused; pending trigger cancelled'); } return this.snapshot(); }
   resume() { if (this.status !== 'paused') throw Error('Strategy is not paused'); this.status='running'; this.haltReason=null; this.log('system','Strategy started'); return this.snapshot(); }
@@ -110,7 +150,15 @@ export class Strategy {
     const bar = {time:c.time || new Date().toISOString(),open:+c.open,high:+c.high,low:+c.low,close:+c.close};
     if (bar.high < Math.max(bar.open,bar.close) || bar.low > Math.min(bar.open,bar.close)) throw Error('Invalid OHLC range');
     const barDay = day(bar.time);
-    if (this.day && barDay !== this.day && this.status === 'running') { this.pause(); this.log('risk','New date detected; manual day reset required'); }
+    if (this.day && barDay !== this.day && this.status === 'running') {
+      this.day = barDay; this.pending = null; this.level = 0; this.legs = [];
+      if (this.tradeMode === 'live') {
+        this.signal = null; this.option = null; this.startedAt = Date.parse(bar.time) || Date.now();
+        this.optionOrders = this.orders().filter(order => order.status === 'open' || order.brokerOrderId);
+        this.log('signal','New day · live mode is waiting for the next signal');
+      }
+      else this.log('system','Existing mode continues on the current contract');
+    }
     this.candles.push(bar); this.candles = this.candles.slice(-200);
     const smaClose = this.sma(5,'close'), smaOpen = this.sma(6,'open');
     bar.smaClose = smaClose === null ? null : fmt(smaClose);
@@ -121,6 +169,7 @@ export class Strategy {
       if (long || short) {
         const raw = long ? bar.high + this.config.entryBuffer : bar.low - this.config.entryBuffer;
         this.pending = {side:this.direction, price:fmt(round(raw,this.config.tickSize)), time:bar.time};
+        this.signal = {day:barDay, side:this.direction, spot:long ? bar.high : bar.low, time:bar.time};
         this.log('signal',`${this.direction.toUpperCase()} trigger at ${this.pending.price}`);
       }
     }
@@ -285,7 +334,7 @@ export class Strategy {
     this.realized = fmt(this.realized + order.pnl);
     this.log('exit', `Option level ${order.level} ${reason} at ${order.exit}`, {pnl:order.pnl});
   }
-  snapshot() { return {config:this.config,direction:this.direction,status:this.status,mode:this.mode,day:this.day,
+  snapshot() { return {config:this.config,direction:this.direction,status:this.status,mode:this.mode,tradeMode:this.tradeMode||'existing',signal:this.signal||null,startedAt:this.startedAt||null,day:this.day,
     candles:this.candles,pending:this.pending,legs:this.legs,history:this.history,events:this.events,
     realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice}; }
 }
