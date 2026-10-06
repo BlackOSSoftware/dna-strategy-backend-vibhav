@@ -203,7 +203,8 @@ export class Strategy {
       this.optionOrders = this.optionOrders.filter(item => item.id !== order.id);
       this.log('order', `Removed level ${order.level}`);
     } else if (action === 'place') {
-      if (order.brokerOrderId) throw Error('This order is already with Sharekhan');
+      if (order.status === 'pending' && order.brokerOrderId) throw Error('This order is already with Sharekhan');
+      if (order.status !== 'pending') order.brokerOrderId = '';
       order.status = 'pending';
       order.routing = input.live ? 'live' : 'paper';
       if (input.live) order.filled = null;

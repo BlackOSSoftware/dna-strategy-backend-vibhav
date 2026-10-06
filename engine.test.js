@@ -44,6 +44,12 @@ test('option grid orders can be edited, placed, and removed',()=>{
   assert.throws(()=>s.optionOrder({action:'remove',id:s.optionOrders[1].id}),/open order/);
   s.optionOrder({action:'place',id:s.optionOrders[0].id});
   assert.equal(s.optionOrders[0].status,'pending');
+  s.optionOrders[0].brokerOrderId='209498391';
+  s.optionOrder({action:'unplace',id:s.optionOrders[0].id});
+  assert.equal(s.optionOrders[0].status,'draft');
+  s.optionOrder({action:'place',id:s.optionOrders[0].id});
+  assert.equal(s.optionOrders[0].brokerOrderId,'');
+  assert.equal(s.optionOrders[0].status,'pending');
   s.optionOrder({action:'unplace',id:s.optionOrders[0].id});
   assert.equal(s.optionOrders[0].status,'draft');
   assert.throws(()=>s.optionOrder({action:'unplace',id:s.optionOrders[0].id}),/placed pending/);
