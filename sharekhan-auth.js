@@ -87,6 +87,7 @@ export class SharekhanAuth {
     if (saved.apiKey) this.config.apiKey = normalize(saved.apiKey);
     if (secureKey) { secureKeyBytes(secureKey); this.config.secureKey = secureKey; }
     this.config.customerId = normalize(saved.customerId);
+    this.config.loginId = normalize(saved.loginId);
     this.config.vendorKey = normalize(saved.vendorKey);
     this.config.versionId = normalize(saved.versionId);
     return this.config;
@@ -96,6 +97,7 @@ export class SharekhanAuth {
       apiKey: normalize(input.apiKey) || this.config.apiKey,
       secureKey: normalize(input.secureKey) || this.config.secureKey,
       customerId: input.customerId != null ? input.customerId : this.config.customerId,
+      loginId: input.loginId != null ? input.loginId : this.config.loginId,
       vendorKey: input.vendorKey != null ? input.vendorKey : this.config.vendorKey,
       versionId: input.versionId != null ? input.versionId : this.config.versionId
     });
@@ -106,13 +108,13 @@ export class SharekhanAuth {
     if(!this.config.apiKey||!this.config.secureKey)return 'Sharekhan API Key and Secure Key are required in backend/.env';
     try{secureKeyBytes(this.config.secureKey);return null}catch{return 'Sharekhan Secure Key must be exactly 32 bytes. Recopy it from the same API app as the API Key.'}
   }
-  status() {const credentialError=this.credentialError();return {configured:!credentialError,apiKey:this.config.apiKey||'',secureKey:this.config.secureKey||'',apiKeyHint:this.config.apiKey?`••••${String(this.config.apiKey).slice(-4)}`:null,connected:this.connectionStatus==='connected',expired:this.connectionStatus==='expired',connectionStatus:this.connectionStatus,customerId:this.session?.customerId||this.config.customerId||null,error:credentialError||this.lastError};}
+  status() {const credentialError=this.credentialError();return {configured:!credentialError,apiKey:this.config.apiKey||'',secureKey:this.config.secureKey||'',apiKeyHint:this.config.apiKey?`••••${String(this.config.apiKey).slice(-4)}`:null,connected:this.connectionStatus==='connected',expired:this.connectionStatus==='expired',connectionStatus:this.connectionStatus,loginId:this.config.loginId||'',customerId:this.session?.customerId||this.config.customerId||null,error:credentialError||this.lastError};}
   start() {
     const credentialError=this.credentialError();if(credentialError)throw Error(credentialError);
     const state=`gridpilot-${crypto.randomBytes(24).toString('hex')}`;
     this.pending={state,expiresAt:Date.now()+10*60_000};
     this.connectionStatus='disconnected';this.lastError=null;
-    return {loginUrl:buildLoginUrl(this.config.apiKey,state,this.config.vendorKey,this.config.versionId,this.config.customerId),expiresInSeconds:600};
+    return {loginUrl:buildLoginUrl(this.config.apiKey,state,this.config.vendorKey,this.config.versionId,this.config.loginId||this.config.customerId),expiresInSeconds:600};
   }
   async verify(force=false) {
     if(!this.session?.accessToken)return this.status();

@@ -29,7 +29,7 @@ test('Sharekhan credentials are encrypted in MongoDB and can be restored', async
   const collection={async updateOne(_filter,update){saved=update.$set;},async findOne(){return saved;}};
   const store=new StrategyStore('mongodb://127.0.0.1:27017','test',key);
   store.credentialCollection=()=>collection;
-  const credentials={apiKey:'api-key-value',secureKey:'12345678901234567890123456789012',customerId:'1464067',vendorKey:'',versionId:''};
+  const credentials={apiKey:'api-key-value',secureKey:'12345678901234567890123456789012',customerId:'1464067',loginId:'pandurangs22',vendorKey:'',versionId:''};
   await store.saveSharekhanCredentials(credentials);
   assert.equal(JSON.stringify(saved).includes(credentials.apiKey),false);
   assert.equal(JSON.stringify(saved).includes(credentials.secureKey),false);

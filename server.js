@@ -30,6 +30,7 @@ const broker=new SharekhanAuth({
   apiKey:process.env.SHAREKHAN_API_KEY,
   secureKey:process.env.SHAREKHAN_SECURE_KEY,
   customerId:process.env.SHAREKHAN_CUSTOMER_ID,
+  loginId:process.env.SHAREKHAN_LOGIN_ID,
   vendorKey:process.env.SHAREKHAN_VENDOR_KEY,
   versionId:process.env.SHAREKHAN_VERSION_ID
 });
@@ -110,7 +111,7 @@ async function liveOptionOrder(data){
   if(data.action==='unplace'){
     const existing=engine.orders().find(item=>item.id===Number(data.id)||item.level===Number(data.level));
     if(existing?.brokerOrderId){
-      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:broker.session?.loginId||broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,contract:engine.option,order:existing,productType:engine.config.productType});
+      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:engine.option,order:existing,productType:engine.config.productType});
       existing.brokerOrderId='';
       existing.routing='paper';
     }
@@ -119,7 +120,7 @@ async function liveOptionOrder(data){
   if(data.action!=='place')return engine.optionOrder(data);
   const accessToken=broker.accessToken();
   const customerId=broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID;
-  const loginId=broker.session?.loginId||customerId;
+  const loginId=sharekhanLoginId();
   if(!accessToken||!customerId)throw Error('Connect Sharekhan before placing a live order');
   const contract=engine.option;
   if(!contract?.scripCode)throw Error('Detected option has no scrip code yet');
@@ -144,9 +145,10 @@ async function liveOptionOrder(data){
     throw error;
   }
 }
+function sharekhanLoginId(){return broker.config.loginId||broker.session?.loginId||broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID||'';}
 function writeSharekhanEnv(config){
   const file=path.join(root,'.env');
-  const keys={SHAREKHAN_API_KEY:config.apiKey||'',SHAREKHAN_SECURE_KEY:config.secureKey||'',SHAREKHAN_CUSTOMER_ID:config.customerId||'',SHAREKHAN_VENDOR_KEY:config.vendorKey||'',SHAREKHAN_VERSION_ID:config.versionId||''};
+  const keys={SHAREKHAN_API_KEY:config.apiKey||'',SHAREKHAN_SECURE_KEY:config.secureKey||'',SHAREKHAN_CUSTOMER_ID:config.customerId||'',SHAREKHAN_LOGIN_ID:config.loginId||'',SHAREKHAN_VENDOR_KEY:config.vendorKey||'',SHAREKHAN_VERSION_ID:config.versionId||''};
   const lines=fs.existsSync(file)?fs.readFileSync(file,'utf8').split(/\r?\n/):[];
   const seen=new Set();
   const next=lines.map(line=>{const match=line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);if(!match||!(match[1] in keys))return line;seen.add(match[1]);return `${match[1]}=${keys[match[1]]}`;}).filter((line,index,all)=>line!==''||index<all.length-1);
@@ -210,6 +212,7 @@ function applySharekhanProcessEnv(config){
   process.env.SHAREKHAN_API_KEY=config.apiKey||'';
   process.env.SHAREKHAN_SECURE_KEY=config.secureKey||'';
   process.env.SHAREKHAN_CUSTOMER_ID=config.customerId||'';
+  process.env.SHAREKHAN_LOGIN_ID=config.loginId||'';
   process.env.SHAREKHAN_VENDOR_KEY=config.vendorKey||'';
   process.env.SHAREKHAN_VERSION_ID=config.versionId||'';
 }

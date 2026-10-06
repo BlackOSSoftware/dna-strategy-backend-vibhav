@@ -78,7 +78,7 @@ export class StrategyStore {
     return JSON.parse(Buffer.concat([decipher.update(Buffer.from(doc.data, 'base64')), decipher.final()]).toString('utf8'));
   }
   async saveSharekhanCredentials(config) {
-    const payload = {apiKey:config?.apiKey||'', secureKey:config?.secureKey||'', customerId:config?.customerId||'', vendorKey:config?.vendorKey||'', versionId:config?.versionId||''};
+    const payload = {apiKey:config?.apiKey||'', secureKey:config?.secureKey||'', customerId:config?.customerId||'', loginId:config?.loginId||'', vendorKey:config?.vendorKey||'', versionId:config?.versionId||''};
     if (!payload.apiKey || !payload.secureKey) throw Error('Sharekhan API Key and Secure Key are required');
     const record = this.encryptRecord(payload, 'gridpilot:sharekhan-credentials:v1');
     await this.credentialCollection().updateOne({_id:'sharekhan'}, {$set:record}, {upsert:true});
