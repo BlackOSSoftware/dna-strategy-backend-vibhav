@@ -101,7 +101,7 @@ export class SharekhanAuth {
     if(!this.config.apiKey||!this.config.secureKey)return 'Sharekhan API Key and Secure Key are required in backend/.env';
     try{secureKeyBytes(this.config.secureKey);return null}catch{return 'Sharekhan Secure Key must be exactly 32 bytes. Recopy it from the same API app as the API Key.'}
   }
-  status() {const credentialError=this.credentialError();return {configured:!credentialError,apiKeyHint:this.config.apiKey?`••••${String(this.config.apiKey).slice(-4)}`:null,connected:this.connectionStatus==='connected',expired:this.connectionStatus==='expired',connectionStatus:this.connectionStatus,customerId:this.session?.customerId||this.config.customerId||null,error:credentialError||this.lastError};}
+  status() {const credentialError=this.credentialError();return {configured:!credentialError,apiKey:this.config.apiKey||'',secureKey:this.config.secureKey||'',apiKeyHint:this.config.apiKey?`••••${String(this.config.apiKey).slice(-4)}`:null,connected:this.connectionStatus==='connected',expired:this.connectionStatus==='expired',connectionStatus:this.connectionStatus,customerId:this.session?.customerId||this.config.customerId||null,error:credentialError||this.lastError};}
   start() {
     const credentialError=this.credentialError();if(credentialError)throw Error(credentialError);
     const state=`gridpilot-${crypto.randomBytes(24).toString('hex')}`;

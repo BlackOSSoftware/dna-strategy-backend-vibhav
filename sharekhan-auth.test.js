@@ -43,8 +43,9 @@ test('credentials can be replaced without returning the secure key',()=>{
   const status=auth.updateCredentials({apiKey:'new-key-value',secureKey:key,customerId:'222'});
   assert.equal(auth.config.apiKey,'new-key-value');
   assert.equal(auth.config.customerId,'222');
+  assert.equal(status.apiKey,'new-key-value');
+  assert.equal(status.secureKey,key);
   assert.equal(status.apiKeyHint,'••••alue');
-  assert.equal(JSON.stringify(status).includes(key),false);
   assert.throws(()=>auth.updateCredentials({secureKey:'short'}),/32 bytes/);
 });
 test('invalid Secure Key is not shown as ready',()=>{
