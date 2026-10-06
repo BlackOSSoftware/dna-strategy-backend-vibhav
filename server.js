@@ -119,7 +119,7 @@ function seedLiveGrid(board){
   engine.optionOrders=rows.map(row=>engine.draftOrder({...row, side, quantity:engine.config.quantity}));
 }
 async function executeLiveGrid(board){
-  if(engine.mode!=='live'||engine.status!=='running'||liveBusy||Date.now()-liveAt<1000)return;
+  if(engine.mode!=='live'||engine.status!=='running'||!engine.inSession()||liveBusy||Date.now()-liveAt<1000)return;
   if(!broker.accessToken()||!engine.option?.scripCode||!(board?.price>0))return;
   liveBusy=true; liveAt=Date.now();
   try{
