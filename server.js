@@ -9,6 +9,7 @@ import {assertInstrument,instrumentMeta,niftyOptionRows,searchInstruments,warmIn
 import {marketCandles} from './market.js';
 import {detectNiftyOption,optionSide,withOptionGrid} from './options.js';
 import {attachLive} from './live.js';
+import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
 import {submitLiveOrder} from './sharekhan-orders.js';
 
@@ -80,6 +81,15 @@ async function resolveOption(config,direction,spot){
   if(symbol!=='NIFTY'&&String(engine.config.scripCode)!=='20000')throw Error('Keep Nifty 50 selected. The option is detected from its price.');
   return detectNiftyOption(await niftyOptionRows(),{spot:await niftySpot(spot),moneyness:config.optionMoneyness,depth:config.optionDepth,right:optionSide(config.optionRight,direction)});
 }
+const allowedOrigins=new Set(['https://strategy-dna.emotionlesstraders.com','http://strategy-dna.emotionlesstraders.com']);
+function allowOrigin(req,res){
+  const origin=req.headers.origin;
+  if(!allowedOrigins.has(origin))return;
+  res.setHeader('Access-Control-Allow-Origin',origin);
+  res.setHeader('Vary','Origin');
+  res.setHeader('Access-Control-Allow-Methods','GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
+}
 function reply(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 let bookCache={at:0,value:null};
 async function verifyBroker(){
@@ -136,7 +146,17 @@ async function liveOptionOrder(data){
 async function body(req){let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>100000)throw Error('Request too large');}return raw?JSON.parse(raw):{};}
 const server=http.createServer(async(req,res)=>{
   try {
+    allowOrigin(req,res);
+    if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}
     const url=new URL(req.url,`http://${req.headers.host}`);
+    if(req.method==='POST'&&url.pathname==='/api/login'){
+      const data=await body(req);
+      const token=login(data.username||data.id, data.password);
+      if(!token)return reply(res,401,{error:'Invalid ID or password'});
+      return reply(res,200,{ok:true,username:verifyToken(token).u,token});
+    }
+    if(!verifyToken(tokenFrom(req,url)))return reply(res,401,{error:'Login required'});
+    if(req.method==='GET'&&url.pathname==='/api/session')return reply(res,200,{ok:true,username:verifyToken(tokenFrom(req,url)).u});
     if(req.method==='GET'&&url.pathname==='/api/state')return reply(res,200,engine.snapshot());
     if(req.method==='GET'&&url.pathname==='/api/instruments/meta')return reply(res,200,instrumentMeta());
     if(req.method==='GET'&&url.pathname==='/api/instruments')return reply(res,200,await searchInstruments(url.searchParams.get('exchange'),url.searchParams.get('q')));
@@ -193,7 +213,7 @@ async function start(){
   server.listen(port,host,()=>{
     console.log(`Grid API: http://${host}:${port} · MongoDB ${store.dbName}`);
     warmInstrumentCache();
-    attachLive(server,{intervalMs:50,nextTick:async()=>{
+    attachLive(server,{intervalMs:50,authorize:token=>!!verifyToken(token),nextTick:async()=>{
       const url=new URL('http://127.0.0.1/api/option');
       url.searchParams.set('direction',engine.direction||'buy');
       url.searchParams.set('moneyness',engine.config.optionMoneyness||'ATM');

@@ -1,9 +1,20 @@
 import {WebSocketServer} from 'ws';
 
-export function attachLive(server, {nextTick, intervalMs = 50}) {
+export function attachLive(server, {nextTick, intervalMs = 50, authorize}) {
   const sockets = new Set();
   let latest = null;
-  const wss = new WebSocketServer({server, path:'/ws'});
+  const wss = new WebSocketServer({
+    server,
+    path:'/ws',
+    verifyClient(info, callback) {
+      try {
+        const token = new URL(info.req.url, 'http://127.0.0.1').searchParams.get('token') || '';
+        callback(!authorize || authorize(token));
+      } catch {
+        callback(false);
+      }
+    }
+  });
   const send = payload => {
     const text = JSON.stringify(payload);
     for (const socket of sockets) if (socket.readyState === 1) socket.send(text);
