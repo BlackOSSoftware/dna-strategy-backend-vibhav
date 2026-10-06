@@ -9,9 +9,10 @@ const secureKeyBytes = secureKey => {
   return key;
 };
 
-export function buildLoginUrl(apiKey, state, vendorKey = '', versionId = '') {
+export function buildLoginUrl(apiKey, state, vendorKey = '', versionId = '', customerId = '') {
   if (!normalize(apiKey) || !normalize(state)) throw Error('Sharekhan API Key and state are required');
   const params = new URLSearchParams({api_key: normalize(apiKey), state: normalize(state)});
+  if (normalize(customerId)) params.set('user_id', normalize(customerId));
   if (normalize(vendorKey)) params.set('vendor_key', normalize(vendorKey));
   if (normalize(versionId)) params.set('version_id', normalize(versionId));
   return `${baseUrl}/skapi/auth/login.html?${params}`;
@@ -41,7 +42,8 @@ export function prepareSessionToken(requestToken, secureKey) {
   const swapped=`${parts[1]}|${parts[0]}`;
   const cipher=crypto.createCipheriv('aes-256-gcm',key,zeroIv);
   const bytes=Buffer.concat([cipher.update(swapped,'utf8'),cipher.final(),cipher.getAuthTag()]);
-  return {encryptedRequestToken:bytes.toString('base64'),customerId:parts.find(x=>/^\d+$/.test(x))||''};
+  const loginId=normalize(parts[1]);
+  return {encryptedRequestToken:bytes.toString('base64'),customerId:loginId,loginId};
 }
 
 export async function exchangeAccessToken({apiKey,secureKey,requestToken,state,vendorKey='',versionId='',fetchImpl=fetch}) {
@@ -54,9 +56,12 @@ export async function exchangeAccessToken({apiKey,secureKey,requestToken,state,v
     body:JSON.stringify(body),signal:AbortSignal.timeout(15000)
   });
   const payload=await response.json().catch(()=>null);
-  const token=normalize(payload?.data?.token||payload?.data?.accessToken||payload?.data?.access_token||payload?.token||payload?.accessToken||payload?.access_token);
+  const data=payload?.data&&typeof payload.data==='object'?payload.data:{};
+  const token=normalize(data.token||data.accessToken||data.access_token||payload?.token||payload?.accessToken||payload?.access_token);
   if (!response.ok || !token) throw Error(`Sharekhan token exchange failed (HTTP ${response.status})`);
-  return {accessToken:token,customerId:normalize(payload?.data?.customerId||payload?.data?.customer_id||payload?.customerId||prepared.customerId)};
+  const customerId=normalize(data.customerId||data.customer_id||payload?.customerId||prepared.customerId);
+  const loginId=normalize(data.loginId||data.loginID||data.userId||data.user_id||prepared.loginId||customerId);
+  return {accessToken:token,customerId,loginId};
 }
 
 export async function verifySharekhanSession({apiKey,accessToken,customerId,fetchImpl=fetch}) {
@@ -107,7 +112,7 @@ export class SharekhanAuth {
     const state=`gridpilot-${crypto.randomBytes(24).toString('hex')}`;
     this.pending={state,expiresAt:Date.now()+10*60_000};
     this.connectionStatus='disconnected';this.lastError=null;
-    return {loginUrl:buildLoginUrl(this.config.apiKey,state,this.config.vendorKey,this.config.versionId),expiresInSeconds:600};
+    return {loginUrl:buildLoginUrl(this.config.apiKey,state,this.config.vendorKey,this.config.versionId,this.config.customerId),expiresInSeconds:600};
   }
   async verify(force=false) {
     if(!this.session?.accessToken)return this.status();

@@ -10,12 +10,13 @@ function findOrderId(payload) {
   return '';
 }
 
-export function buildOptionOrder({customerId, contract, order, productType, requestType = 'NEW', orderId = ''}) {
+export function buildOptionOrder({customerId, loginId, contract, order, productType, requestType = 'NEW', orderId = ''}) {
   const lot = Number(contract?.lotSize);
   const lots = Number(order?.quantity);
   if (!Number.isInteger(lot) || lot < 1) throw Error('Option lot size is missing, so the live order was not sent');
   if (!Number.isInteger(lots) || lots < 1) throw Error('Quantity must be a whole number of lots');
   if (!contract?.scripCode || !contract?.strike || !contract?.optionType || !contract?.expiry) throw Error('Detected option is incomplete, so the live order was not sent');
+  const apiLoginId = String(loginId || customerId);
   const body = {
     customerId: Number(customerId),
     scripCode: Number(contract.scripCode),
@@ -30,7 +31,7 @@ export function buildOptionOrder({customerId, contract, order, productType, requ
     rmsCode: 'ANY',
     afterHour: 'N',
     orderType: 'NORMAL',
-    channelUser: String(customerId),
+    channelUser: apiLoginId,
     validity: 'GFD',
     requestType,
     productType: productType || 'INVESTMENT',
@@ -58,8 +59,8 @@ export async function sendSharekhanOrder({apiKey, accessToken, body, fetchImpl =
   return {orderId, quantity: body.quantity, message};
 }
 
-export async function submitLiveOrder({apiKey, accessToken, customerId, contract, order, productType, fetchImpl}) {
+export async function submitLiveOrder({apiKey, accessToken, customerId, loginId, contract, order, productType, fetchImpl}) {
   if (!accessToken || !customerId) throw Error('Connect Sharekhan before placing a live order');
-  const body = buildOptionOrder({customerId, contract, order, productType, requestType: order?.brokerOrderId ? 'CANCEL' : 'NEW', orderId: order?.brokerOrderId || ''});
+  const body = buildOptionOrder({customerId, loginId, contract, order, productType, requestType: order?.brokerOrderId ? 'CANCEL' : 'NEW', orderId: order?.brokerOrderId || ''});
   return sendSharekhanOrder({apiKey, accessToken, body, fetchImpl});
 }

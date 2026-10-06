@@ -6,8 +6,10 @@ const contract = {tradingSymbol:'NIFTY', exchange:'NF', scripCode:'40699', strik
 const order = {side:'buy', entry:79.95, quantity:1};
 
 test('live option order uses one lot and does not send without a Sharekhan session', async () => {
-  const body = buildOptionOrder({customerId:'12345', contract, order, productType:'INVESTMENT'});
+  const body = buildOptionOrder({customerId:'12345', loginId:'APILOGIN', contract, order, productType:'INVESTMENT'});
   assert.equal(body.quantity, 65);
+  assert.equal(body.customerId, 12345);
+  assert.equal(body.channelUser, 'APILOGIN');
   assert.equal(body.transactionType, 'B');
   assert.equal(body.requestType, 'NEW');
   assert.equal(body.price, '79.95');

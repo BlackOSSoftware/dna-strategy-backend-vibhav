@@ -110,7 +110,7 @@ async function liveOptionOrder(data){
   if(data.action==='unplace'){
     const existing=engine.orders().find(item=>item.id===Number(data.id)||item.level===Number(data.level));
     if(existing?.brokerOrderId){
-      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,contract:engine.option,order:existing,productType:engine.config.productType});
+      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:broker.session?.loginId||broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,contract:engine.option,order:existing,productType:engine.config.productType});
       existing.brokerOrderId='';
       existing.routing='paper';
     }
@@ -119,6 +119,7 @@ async function liveOptionOrder(data){
   if(data.action!=='place')return engine.optionOrder(data);
   const accessToken=broker.accessToken();
   const customerId=broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID;
+  const loginId=broker.session?.loginId||customerId;
   if(!accessToken||!customerId)throw Error('Connect Sharekhan before placing a live order');
   const contract=engine.option;
   if(!contract?.scripCode)throw Error('Detected option has no scrip code yet');
@@ -129,7 +130,7 @@ async function liveOptionOrder(data){
   engine.optionOrder({...data,live:true});
   const order=engine.orders().find(item=>item.level===Number(data.level))||engine.orders().find(item=>item.id===Number(data.id));
   try{
-    const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId,contract,order,productType:engine.config.productType});
+    const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId,loginId,contract,order,productType:engine.config.productType});
     order.brokerOrderId=sent.orderId;
     order.brokerQty=sent.quantity;
     engine.log('order',`Sharekhan order ${sent.orderId} · level ${order.level} · qty ${sent.quantity}`);

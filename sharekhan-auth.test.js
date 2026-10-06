@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
-import {SharekhanAuth,buildLoginUrl,exchangeAccessToken,extractRequestToken,verifySharekhanSession} from './sharekhan-auth.js';
+import {SharekhanAuth,buildLoginUrl,exchangeAccessToken,extractRequestToken,prepareSessionToken,verifySharekhanSession} from './sharekhan-auth.js';
 
 const key='12345678901234567890123456789012';
 test('restored Sharekhan session is verified before being marked connected', async () => {
@@ -35,6 +35,8 @@ test('token exchange sends swapped encrypted request and keeps access token serv
   const result=await exchangeAccessToken({apiKey:'demo-key',secureKey:key,requestToken:raw,state:'state-1',fetchImpl});
   assert.equal(result.accessToken,'access-only-on-server');
   assert.equal(result.customerId,'12345');
+  assert.equal(result.loginId,'12345');
+  assert.equal(prepareSessionToken(requestToken('99887766|12345'),key).customerId,'12345');
   assert.notEqual(sent.requestToken,raw);
   assert.equal(sent.state,'state-1');
 });
