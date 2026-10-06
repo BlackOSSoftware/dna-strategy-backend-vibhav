@@ -103,7 +103,7 @@ async function brokerBook(){
   const accessToken=broker.accessToken();
   if(!accessToken){bookCache={at:0,value:null};return sharekhanBook({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:'',customerId:''});}
   if(bookCache.value&&Date.now()-bookCache.at<2000)return bookCache.value;
-  const value=await sharekhanBook({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID});
+  const value=await sharekhanBook({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:broker.config.loginId||''});
   bookCache={at:Date.now(),value};
   return value;
 }

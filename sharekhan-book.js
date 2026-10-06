@@ -119,20 +119,29 @@ function messageOf(payload, status) {
   return String(payload?.message || payload?.error || payload?.errormsg || payload?.data?.message || `Sharekhan book failed (HTTP ${status})`);
 }
 
-export async function sharekhanBook({apiKey, accessToken, customerId, fetchImpl = fetch}) {
-  const empty = {connected: false, orders: [], positions: [], error: 'Connect Sharekhan to load the live order book and positions'};
+export function mapFunds(row) {
+  if (!row || typeof row !== 'object' || row.currentCashBalance == null) return null;
+  const num = value => { const number = Number(value); return Number.isFinite(number) ? number : 0; };
+  return {cash:num(row.currentCashBalance), nonCash:num(row.nonCashLimit), fnoMargin:num(row.intradayMarginFno), hold:num(row.holdFunds), withdrawal:num(row.pendingWithdrawalRequest), fnoPremium:num(row.fnoPremium)};
+}
+export async function sharekhanBook({apiKey, accessToken, customerId, loginId = '', fetchImpl = fetch}) {
+  const profile = {loginId:String(loginId || ''), customerId:String(customerId || '')};
+  const empty = {connected: false, orders: [], positions: [], funds: null, profile, error: 'Connect Sharekhan to load the live order book and positions'};
   if (!accessToken || !customerId) return empty;
   const headers = {Accept: 'application/json', 'api-key': String(apiKey || '').trim(), 'access-token': String(accessToken).trim()};
   const get = path => fetchImpl(`${baseUrl}${path}`, {method: 'GET', headers, signal: AbortSignal.timeout(10000)});
   try {
-    const [ordersResponse, positionsResponse] = await Promise.all([
+    const [ordersResponse, positionsResponse, fundsResponse] = await Promise.all([
       get(`/skapi/services/reports/${encodeURIComponent(customerId)}`),
-      get(`/skapi/services/trades/${encodeURIComponent(customerId)}`)
+      get(`/skapi/services/trades/${encodeURIComponent(customerId)}`),
+      get(`/skapi/services/limitstmt/NC/${encodeURIComponent(customerId)}`).catch(() => null)
     ]);
     const ordersPayload = await ordersResponse.json().catch(() => null);
     const positionsPayload = await positionsResponse.json().catch(() => null);
+    const fundsPayload = await fundsResponse?.json?.().catch(() => null);
+    const funds = mapFunds(Array.isArray(fundsPayload?.data) ? fundsPayload.data[0] : null);
     if (ordersResponse.status === 401 || positionsResponse.status === 401 || ordersResponse.status === 403 || positionsResponse.status === 403) {
-      return {connected: false, orders: [], positions: [], error: 'Sharekhan session expired. Connect again to see the live order book.'};
+      return {connected: false, orders: [], positions: [], funds, profile, error: 'Sharekhan session expired. Connect again to see the live order book.'};
     }
     const ordersError = reportError(ordersResponse, ordersPayload, 'Order book');
     const positionsError = reportError(positionsResponse, positionsPayload, 'Positions');
@@ -140,9 +149,10 @@ export async function sharekhanBook({apiKey, accessToken, customerId, fetchImpl 
       connected: !ordersError && !positionsError,
       orders: ordersError ? [] : listFrom(ordersPayload).map(mapOrder),
       positions: positionsError ? [] : listFrom(positionsPayload).map(mapPosition),
+      funds, profile,
       error: [ordersError, positionsError].filter(Boolean).join('; ') || null
     };
   } catch (error) {
-    return {connected: false, orders: [], positions: [], error: error.name === 'TimeoutError' ? 'Sharekhan order book timed out' : 'Could not load the Sharekhan order book right now'};
+    return {connected: false, orders: [], positions: [], funds: null, profile, error: error.name === 'TimeoutError' ? 'Sharekhan order book timed out' : 'Could not load the Sharekhan order book right now'};
   }
 }

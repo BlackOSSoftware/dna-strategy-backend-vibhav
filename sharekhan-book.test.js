@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {listFrom, mapOrder, mapPosition, sharekhanBook} from './sharekhan-book.js';
+import {listFrom, mapFunds, mapOrder, mapPosition, sharekhanBook} from './sharekhan-book.js';
 
 test('day report and net position payloads become order book rows', () => {
   const orders = listFrom({status: 200, data: [{orderId: '9001', tradingSymbol: 'NIFTY', strikePrice: '22550', optionType: 'CE', expiry: '06/10/2026', transactionType: 'B', orderQty: 65, executedQty: 65, orderPrice: '83.30', orderStatus: 'Fully Executed', productType: 'INVESTMENT', exchange: 'NF'}]});
@@ -22,6 +22,10 @@ test('day report and net position payloads become order book rows', () => {
   assert.equal(mapPosition(positions[0]).pnl, 110.5);
 });
 
+test('cash balance is read from the Sharekhan fund statement', () => {
+  assert.equal(mapFunds({currentCashBalance:'10.5', nonCashLimit:1, intradayMarginFno:2, holdFunds:3, pendingWithdrawalRequest:4, fnoPremium:5}).cash, 10.5);
+  assert.equal(mapFunds(null), null);
+});
 test('book stays empty until Sharekhan is connected and never sends an order', async () => {
   const disconnected = await sharekhanBook({apiKey: 'key', accessToken: '', customerId: '1', fetchImpl: async () => { throw Error('should not fetch'); }});
   assert.equal(disconnected.connected, false);
