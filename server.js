@@ -67,6 +67,7 @@ async function optionBoard(url,maxAge=15000){
     const strike=Number(url.searchParams.get('strike'));
     contract={tradingSymbol:'NIFTY',exchange:'NF',scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||0,spot:Number(url.searchParams.get('spot'))||null,label:`NIFTY ${strike} ${right}`};
   }else contract=await resolveOption({optionMoneyness:url.searchParams.get('moneyness')||engine.config.optionMoneyness,optionDepth:url.searchParams.get('depth')||engine.config.optionDepth,optionRight:url.searchParams.get('right')||engine.config.optionRight},direction,url.searchParams.get('spot'));
+  if(contract?.scripCode&&!engine.orders().some(order=>order.brokerOrderId)&&(Number(engine.option?.strike)!==Number(contract.strike)||engine.option?.optionType!==contract.optionType)){engine.option=contract;await save();}
   let board;
   try{board=await withOptionGrid(contract,settings);}
   catch(error){board={...contract,side:settings.side,price:null,grid:[],gridError:error.message};}
