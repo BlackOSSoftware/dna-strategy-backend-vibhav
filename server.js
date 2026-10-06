@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {Strategy} from './engine.js';
+import {Strategy, defaults} from './engine.js';
 import {SharekhanAuth} from './sharekhan-auth.js';
 import {StrategyStore} from './store.js';
 import {assertInstrument,instrumentMeta,niftyOptionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
@@ -40,6 +40,7 @@ function restore(snapshot){
   if(!snapshot)return;
   const {pnl,...state}=snapshot;
   Object.assign(engine,state);
+  engine.config={...defaults,...engine.config};
   engine.nextId=(engine.events||[]).reduce((max,event)=>Math.max(max,Number(event.id)||0),0)+1;
   if(engine.status==='running'){engine.status='paused';engine.pending=null;engine.log('risk','Server restarted; manually resume after checking broker positions');}
 }

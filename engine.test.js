@@ -22,8 +22,9 @@ test('long signal, grid, no re-entry',()=>{
 });
 test('short signal and daily risk limit',()=>{
   const s=new Strategy({quantity:100,maxLoss:500});s.arm('short');
-  for(let i=0;i<5;i++)s.candle({open:100,high:101,low:99,close:100});
-  s.candle({open:100,high:101,low:96,close:97});
+  const start=Date.parse(`${s.day}T04:00:00Z`);
+  for(let i=0;i<5;i++)s.candle({time:new Date(start+i*900000).toISOString(),open:100,high:101,low:99,close:100});
+  s.candle({time:new Date(start+5*900000).toISOString(),open:100,high:101,low:96,close:97});
   assert.equal(s.pending.price,94);
   s.tick(94);s.tick(100);
   assert.equal(s.status,'killed');assert.equal(s.legs.length,0);
@@ -64,6 +65,14 @@ test('a live order stays pending when the premium crosses its entry',()=>{
   s.markOptionPrice(85.05);
   assert.equal(s.optionOrders[0].status,'pending');
   assert.equal(s.optionOrders[0].routing,'live');
+});
+test('entries stay inside the strategy start and end time',()=>{
+  const s=new Strategy({strategyStart:'09:20',strategyEnd:'15:10'});
+  s.arm('buy');
+  const late=Date.parse(`${s.day}T10:30:00Z`);
+  for(let i=0;i<6;i++)s.candle({time:new Date(late+i*900000).toISOString(),open:100,high:104,low:99,close:103});
+  assert.equal(s.pending,null);
+  assert.throws(()=>s.configure({strategyStart:'15:30',strategyEnd:'09:15'}),/after the start/);
 });
 test('start and stop stay available after a kill',()=>{
   const s=new Strategy();

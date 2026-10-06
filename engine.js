@@ -3,8 +3,17 @@ export const defaults = Object.freeze({
   quantity: 1, maxLegs: 4, entryBuffer: 2, gridStep: 7, targetPoints: 12,
   initialStop: 20, trailStartLeg: 3, trailStep: 8,
   maxLoss: 5000, maxProfit: 20000, tickSize: 0.05,
+  strategyStart: '09:15', strategyEnd: '15:15',
   optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO'
 });
+const clockValue = value => {
+  const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return '';
+  const hour = Number(match[1]), minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return '';
+  return `${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}`;
+};
+const clockMinutes = value => { const clock = clockValue(value); return clock ? Number(clock.slice(0,2)) * 60 + Number(clock.slice(3)) : null; };
 
 const round = (n, tick) => Math.round(n / tick) * tick;
 const fmt = n => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -23,7 +32,11 @@ export class Strategy {
   log(type, message, data = {}) { this.events.unshift({id:this.nextId++, time:new Date().toISOString(), type, message, ...data}); this.events.length = Math.min(this.events.length, 200); }
   configure(input) {
     if (this.status === 'running' && this.legs.length) throw Error('Close positions before changing settings');
-    const next = {...this.config, ...input};
+    const next = {...defaults, ...this.config, ...input};
+    const start = clockValue(next.strategyStart), end = clockValue(next.strategyEnd);
+    if (!start || !end) throw Error('Strategy start and end must be a time like 09:15');
+    if (clockMinutes(start) >= clockMinutes(end)) throw Error('Strategy end must be after the start');
+    next.strategyStart = start; next.strategyEnd = end;
     const labels = {quantity:'Quantity per leg',maxLegs:'Maximum legs',entryBuffer:'Entry buffer',gridStep:'Grid step',targetPoints:'Target per leg',initialStop:'Initial stop',trailStartLeg:'Trail starts at leg',trailStep:'Trailing step',maxLoss:'Max daily loss',maxProfit:'Max daily profit',tickSize:'Tick size'};
     for (const k of Object.keys(labels)) {
       if (!Number.isFinite(+next[k]) || +next[k] <= 0) throw Error(`${labels[k]} must be greater than 0`);
@@ -40,7 +53,16 @@ export class Strategy {
     next.optionMoneyness = moneyness; next.optionRight = right; next.optionDepth = depth;
     next.symbol = String(next.symbol || '').trim().toUpperCase();
     if (!next.symbol) throw Error('Symbol is required');
-    this.config = next; this.log('settings','Strategy settings updated'); return this.snapshot();
+    this.config = next; this.log('settings',`Strategy settings updated · ${start}–${end} IST`); return this.snapshot();
+  }
+  inSession(ts = Date.now()) {
+    const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).formatToParts(new Date(ts));
+    const hour = parts.find(part => part.type === 'hour')?.value;
+    const minute = parts.find(part => part.type === 'minute')?.value;
+    const now = clockMinutes(`${hour === '24' ? '00' : hour}:${minute}`);
+    const start = clockMinutes(this.config.strategyStart) ?? clockMinutes(defaults.strategyStart);
+    const end = clockMinutes(this.config.strategyEnd) ?? clockMinutes(defaults.strategyEnd);
+    return now !== null && now >= start && now < end;
   }
   start(direction, mode = 'paper', contract = null) {
     if (!['buy','short'].includes(direction)) throw Error('Choose buy or short');
@@ -93,7 +115,7 @@ export class Strategy {
     const smaClose = this.sma(5,'close'), smaOpen = this.sma(6,'open');
     bar.smaClose = smaClose === null ? null : fmt(smaClose);
     bar.smaOpen = smaOpen === null ? null : fmt(smaOpen);
-    if (this.status === 'running' && !this.level && !this.pending && smaClose !== null && smaOpen !== null) {
+    if (this.status === 'running' && !this.level && !this.pending && this.inSession(bar.time) && smaClose !== null && smaOpen !== null) {
       const long = this.direction === 'buy' && bar.close > bar.open && bar.close > smaClose && bar.close > smaOpen;
       const short = this.direction === 'short' && bar.close < bar.open && bar.close < smaClose && bar.close < smaOpen;
       if (long || short) {
@@ -150,8 +172,10 @@ export class Strategy {
       }
       if (!this.legs.length) { this.status='halted'; this.haltReason='All legs exited; no re-entry'; return this.snapshot(); }
     }
-    if (allowEntry && this.pending && favorable(price,this.pending.price)) { this.addLeg(price); this.pending=null; }
-    if (allowEntry && this.level && this.legs.length && this.level<this.config.maxLegs) {
+    const sessionOpen = this.inSession(this.candles.at(-1)?.time || Date.now());
+    if (allowEntry && !sessionOpen && this.pending) { this.pending = null; this.log('signal','Trigger cancelled; outside strategy hours'); }
+    if (allowEntry && sessionOpen && this.pending && favorable(price,this.pending.price)) { this.addLeg(price); this.pending=null; }
+    if (allowEntry && sessionOpen && this.level && this.legs.length && this.level<this.config.maxLegs) {
       if (this.firstEntry !== null) {
         const next=this.firstEntry+(side==='buy'?1:-1)*this.config.gridStep*this.level;
         if (favorable(price,next)) this.addLeg(price);
