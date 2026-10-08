@@ -25,7 +25,7 @@ export function liveIntents(orders, price, side = 'buy', now = Date.now()) {
   const intents = [];
   for (const order of orders) {
     if (!(order.entry > 0) || !(order.stop > 0) || !(order.target > 0)) continue;
-    if (order.liveHoldUntil > now) continue;
+    if (order.status === 'rejected' || order.liveHoldUntil > now) continue;
     const buy = (order.side || side) !== 'short';
     const reached = buy ? price >= order.entry : price <= order.entry;
     if (!order.brokerOrderId && (order.status === 'draft' || order.status === 'pending') && reached) {
@@ -53,7 +53,12 @@ export function applyBrokerFills(orders, bookOrders = [], close) {
   const byId = new Map(bookOrders.map(row => [String(row.orderId), row]));
   for (const order of orders) {
     const entry = byId.get(String(order.brokerOrderId || ''));
-    if (entry && /reject|cancel/i.test(String(entry.status || '')) && order.status === 'pending') {
+    if (entry && /reject/i.test(String(entry.status || '')) && order.status === 'pending') {
+      order.status = 'rejected';
+      order.rejectReason = entry.reason || entry.status;
+      continue;
+    }
+    if (entry && /cancel/i.test(String(entry.status || '')) && order.status === 'pending') {
       order.status = 'draft';
       order.brokerOrderId = '';
       continue;

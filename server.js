@@ -7,7 +7,7 @@ import {SharekhanAuth} from './sharekhan-auth.js';
 import {StrategyStore} from './store.js';
 import {assertInstrument,instrumentMeta,niftyOptionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
 import {marketCandles} from './market.js';
-import {detectNiftyOption,optionSide,withOptionGrid} from './options.js';
+import {detectOption,optionPremium,optionSide,optionUnderlying,withOptionGrid} from './options.js';
 import {attachLive} from './live.js';
 import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
@@ -49,12 +49,27 @@ function restore(snapshot){
   if(engine.status==='running'){engine.status='paused';engine.pending=null;engine.log('risk','Server restarted; manually resume after checking broker positions');}
 }
 async function save(){await store.save(engine.snapshot());}
-async function niftySpot(given){
+async function underlyingSpot(given){
   const price=Number(given);
   if(Number.isFinite(price)&&price>0)return price;
-  if(Number(engine.lastPrice)>0)return Number(engine.lastPrice);
-  const market=await marketCandles({exchange:'NC',scripCode:'20000',symbol:'NIFTY',apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
-  return market.last?.close;
+  const symbol=engine.config.symbol||'NIFTY';
+  const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+  const close=Number(market.last?.close);
+  if(!(close>0))throw Error(`${optionUnderlying(symbol)} price is not available yet`);
+  return close;
+}
+async function optionQuote(contract){
+  try{
+    return await optionPremium({expiry:contract.expiry,strike:contract.strike,right:contract.optionType,symbol:contract.tradingSymbol});
+  }catch(nseError){
+    if(!(broker.accessToken()&&contract?.scripCode))throw nseError;
+    try{
+      const market=await marketCandles({exchange:contract.exchange||'NF',scripCode:contract.scripCode,symbol:contract.tradingSymbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+      const price=Number(market.last?.close);
+      if(price>0)return {price,bid:null,ask:null,underlying:null};
+    }catch{/* History can be rate-limited; the chart retries on its own. */}
+    throw nseError;
+  }
 }
 function gridSettings(url,direction){
   const cfg=engine.config;
@@ -69,26 +84,32 @@ async function optionBoard(url,maxAge=15000){
   if(url.searchParams.get('strike')&&url.searchParams.get('expiry')){
     const right=optionSide(url.searchParams.get('right')||'CE',direction);
     const strike=Number(url.searchParams.get('strike'));
-    contract={tradingSymbol:'NIFTY',exchange:'NF',scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||0,spot:Number(url.searchParams.get('spot'))||null,label:`NIFTY ${strike} ${right}`};
+    const name=optionUnderlying(url.searchParams.get('symbol')||engine.config.symbol||'NIFTY');
+    contract={tradingSymbol:name,exchange:'NF',scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||0,spot:Number(url.searchParams.get('spot'))||null,label:`${name} ${strike} ${right}`};
   }else contract=await resolveOption({optionMoneyness:url.searchParams.get('moneyness')||engine.config.optionMoneyness,optionDepth:url.searchParams.get('depth')||engine.config.optionDepth,optionRight:url.searchParams.get('right')||engine.config.optionRight},direction,url.searchParams.get('spot'));
   const previewOnly=engine.tradeMode==='live'&&!(engine.signal?.spot>0);
   const keepExisting=engine.tradeMode!=='live'&&engine.option?.scripCode&&engine.status!=='idle';
-  if(!previewOnly&&!keepExisting&&contract?.scripCode&&!engine.orders().some(order=>order.brokerOrderId)&&(Number(engine.option?.strike)!==Number(contract.strike)||engine.option?.optionType!==contract.optionType)){engine.option=contract;await save();}
+  const liveLocked=engine.orders().some(order=>order.brokerOrderId||order.status==='open'||order.status==='pending');
+  const sameContract=engine.option?.scripCode&&String(engine.option.scripCode)===String(contract?.scripCode);
+  if(contract?.scripCode&&!liveLocked&&!sameContract){engine.optionOrders=[];engine.option=contract;await save();}
+  else if(!previewOnly&&!keepExisting&&contract?.scripCode&&!liveLocked&&(engine.option?.tradingSymbol!==contract.tradingSymbol||Number(engine.option?.strike)!==Number(contract.strike)||engine.option?.optionType!==contract.optionType)){engine.option=contract;await save();}
+  if(Number(contract?.tickSize)>0)settings.tickSize=Number(contract.tickSize);
+  let quote=null;
+  try{quote=await optionQuote(contract);}catch(error){quote={error};}
   let board;
-  try{board=await withOptionGrid(contract,settings);}
+  try{if(quote?.error)throw quote.error;board=await withOptionGrid(contract,{...settings,quote});}
   catch(error){board={...contract,side:settings.side,price:null,grid:[],gridError:error.message};}
   if(board.price){
     const before=JSON.stringify(engine.optionOrders||[]);
     engine.markOptionPrice(board.price);
     if(JSON.stringify(engine.optionOrders||[])!==before)await save();
   }
-  board.orders=engine.orders();
+  board.orders=String(engine.option?.scripCode||'')===String(contract?.scripCode||'')?engine.orders():[];
   return board;
 }
 async function resolveOption(config,direction,spot){
-  const symbol=String(engine.config.symbol||'').toUpperCase();
-  if(symbol!=='NIFTY'&&String(engine.config.scripCode)!=='20000')throw Error('Keep Nifty 50 selected. The option is detected from its price.');
-  return detectNiftyOption(await niftyOptionRows(),{spot:await niftySpot(spot),moneyness:config.optionMoneyness,depth:config.optionDepth,right:optionSide(config.optionRight,direction)});
+  const symbol=optionUnderlying(engine.config.symbol||'NIFTY');
+  return detectOption(await niftyOptionRows(),{symbol,spot:await underlyingSpot(spot),moneyness:config.optionMoneyness,depth:config.optionDepth,right:optionSide(config.optionRight,direction)});
 }
 const allowedOrigins=new Set(['https://strategy-dna.emotionlesstraders.com','http://strategy-dna.emotionlesstraders.com']);
 function allowOrigin(req,res){
@@ -157,6 +178,12 @@ async function executeLiveGrid(board){
     trailOpenStops(orders, board.price, {side, trailStartLeg:engine.config.trailStartLeg, trailStep:engine.config.trailStep, tick:engine.config.tickSize});
     const book=await brokerBook();
     applyBrokerFills(orders, book.orders||[], (order, price, reason)=>engine.closeOptionOrder(order, price, reason));
+    for(const order of orders){
+      if(order.status==='rejected'&&order.rejectReason&&!order.rejectLogged){
+        order.rejectLogged=true;
+        engine.log('risk',`Sharekhan rejected level ${order.level}: ${order.rejectReason}`);
+      }
+    }
     for(const intent of liveIntents(orders, board.price, side)){
       const order=orders.find(item=>item.level===intent.level);
       if(!order)continue;
@@ -339,7 +366,7 @@ async function start(){
       await refreshLiveSignal();
       if(engine.tradeMode==='live'&&engine.signal?.spot>0)url.searchParams.set('spot',String(engine.signal.spot));
       else if(engine.tradeMode!=='live'&&engine.option?.strike&&engine.option?.expiry){url.searchParams.set('strike',engine.option.strike);url.searchParams.set('expiry',engine.option.expiry);url.searchParams.set('right',engine.option.optionType);url.searchParams.set('scrip',engine.option.scripCode||'');}
-      const board=await optionBoard(url,200);
+      const board=await optionBoard(url,2000);
       if(engine.mode==='live')await executeLiveGrid(board);
       if(!board?.price)return {error:board?.gridError||'Waiting for the option price'};
       return {nifty:board.nifty,price:board.price,bid:board.bid,ask:board.ask,label:board.label,side:board.side,orders:(board.orders||[]).map(order=>({level:order.level,status:order.status,entry:order.entry}))};

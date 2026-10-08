@@ -93,6 +93,7 @@ export function mapOrder(row) {
     filled: String(first(row, ['executedQty', 'filledQty', 'tradedQty', 'fillQty']) ?? '0'),
     price: numOrNull(first(row, ['orderPrice', 'price', 'limitPrice', 'avgPrice'])),
     status: String(first(row, ['orderStatus', 'status', 'orderstate']) ?? '—'),
+    reason: String(first(row, ['errorMsg', 'errorMessage', 'rejectionReason', 'rejectReason', 'rmsReason', 'remarks', 'orderRemarks']) ?? '').trim(),
     product: String(first(row, ['productType', 'product']) ?? '—'),
     exchange: String(first(row, ['exchange']) ?? '')
   };

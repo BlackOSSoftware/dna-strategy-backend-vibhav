@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectNiftyOption, optionGridRows, optionSide} from './options.js';
+import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying} from './options.js';
 
 const asOf = new Date('2026-10-05T08:30:00+05:30');
 const rows = [];
@@ -24,6 +24,23 @@ test('nearest expiry and moneyness around the Nifty price', () => {
   assert.equal(detectNiftyOption(rows, {spot:22510, moneyness:'OTM', depth:2, right:'CE', asOf}).strike, 22600);
   assert.equal(detectNiftyOption(rows, {spot:22510, moneyness:'ITM', depth:1, right:'PE', asOf}).strike, 22550);
   assert.equal(detectNiftyOption(rows, {spot:22510, moneyness:'OTM', depth:1, right:'PE', asOf}).strike, 22450);
+});
+
+test('detects the selected underlying, including Bank Nifty and Reliance', () => {
+  assert.equal(optionUnderlying('NIFTYBANK'), 'BANKNIFTY');
+  assert.equal(optionUnderlying('RELIANCE'), 'RELIANCE');
+  const chain = [
+    ...rows,
+    {tradingSymbol:'BANKNIFTY', expiry:'13/10/2026', strike:52000, optionType:'CE', scripCode:11, lotSize:30, tickSize:0.05},
+    {tradingSymbol:'BANKNIFTY', expiry:'13/10/2026', strike:52100, optionType:'CE', scripCode:12, lotSize:30, tickSize:0.05},
+    {tradingSymbol:'RELIANCE', expiry:'27/10/2026', strike:1200, optionType:'CE', scripCode:21, lotSize:500, tickSize:0.05},
+    {tradingSymbol:'RELIANCE', expiry:'27/10/2026', strike:1220, optionType:'CE', scripCode:22, lotSize:500, tickSize:0.05}
+  ];
+  assert.equal(detectOption(chain, {symbol:'NIFTYBANK', spot:52040, moneyness:'ATM', right:'CE', asOf}).label, 'BANKNIFTY 52000 CE');
+  const reliance = detectOption(chain, {symbol:'RELIANCE', spot:1210, moneyness:'ATM', right:'CE', asOf});
+  assert.equal(reliance.strike, 1200);
+  assert.equal(reliance.tradingSymbol, 'RELIANCE');
+  assert.equal(reliance.exchange, 'NF');
 });
 
 test('option premium grid is independent of the Nifty index', () => {

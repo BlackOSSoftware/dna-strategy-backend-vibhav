@@ -1,5 +1,6 @@
-const intervals = ['15minute', '15min', '15'];
+const intervals = ['15minute'];
 const cache = new Map();
+const inflight = new Map();
 
 function field(row, names) {
   if (Array.isArray(row)) return null;
@@ -15,6 +16,12 @@ function candleTime(value) {
   if (typeof value === 'number') return value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
   const raw = String(value).trim();
   if (/^\d{10,13}$/.test(raw)) return candleTime(Number(raw));
+  const dated = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (dated) {
+    const iso = `${dated[3]}-${dated[2].padStart(2, '0')}-${dated[1].padStart(2, '0')}T${dated[4] || '00'}:${dated[5] || '00'}:${dated[6] || '00'}+05:30`;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+  }
   const iso = raw.includes('T') ? raw : raw.replace(' ', 'T');
   const zoned = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}+05:30`;
   const ms = Date.parse(zoned);
@@ -24,7 +31,7 @@ function candleTime(value) {
 function normalizeRow(row) {
   const source = Array.isArray(row) ? {time:row[0], open:row[1], high:row[2], low:row[3], close:row[4], volume:row[5]} : row;
   const date = field(source, ['datetime', 'date', 'tradedate', 'timestamp', 'time', 'candleTime']);
-  const clock = field(source, ['bartime']);
+  const clock = field(source, ['bartime', 'tradetime']);
   const time = candleTime(clock && date && !String(date).includes(':') ? `${date} ${clock}` : date);
   const open = Number(field(source, ['open', 'o']));
   const high = Number(field(source, ['high', 'h']));
@@ -65,6 +72,12 @@ async function sharekhanHistory({market, code, apiKey, accessToken, fetchImpl}) 
     });
     const payload = await response.json().catch(() => null);
     if (response.status === 401 || response.status === 403) throw Error('Sharekhan session is required for broker chart history');
+    if (response.status === 429) {
+      const retryAfter = Number(response.headers?.get?.('retry-after'));
+      const error = Error('Sharekhan history is rate-limited. The strike chart will retry shortly.');
+      error.retryMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 60_000) : 20_000;
+      throw error;
+    }
     if (!response.ok) {
       lastError = payload?.message || payload?.errorType || `Sharekhan history failed (HTTP ${response.status})`;
       continue;
@@ -105,17 +118,36 @@ export async function marketCandles({exchange, scripCode, symbol = '', apiKey, a
   const market = String(exchange || '').trim().toUpperCase();
   if (!code) throw Error('Choose a scrip from the search list to load the chart');
   const cacheKey = `${market}:${code}:${accessToken ? 'sharekhan' : 'index'}`;
+  const now = Date.now();
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.at < 60_000) return cached.value;
+  if (cached?.value && now - cached.at < 60_000) return cached.value;
+  if (cached?.error && now < cached.until) {
+    if (cached.value) return cached.value;
+    throw Error(cached.error);
+  }
+  const pending = inflight.get(cacheKey);
+  if (pending) return pending;
+  const job = loadCandles({market, code, symbol, apiKey, accessToken, fetchImpl, cacheKey, previous:cached?.value || null});
+  inflight.set(cacheKey, job);
+  try { return await job; }
+  finally { inflight.delete(cacheKey); }
+}
+
+async function loadCandles({market, code, symbol, apiKey, accessToken, fetchImpl, cacheKey, previous}) {
   let value;
   if (accessToken) {
     try { value = await sharekhanHistory({market, code, apiKey, accessToken, fetchImpl}); }
-    catch (error) { if (!isNiftyIndex(symbol, market, code)) throw error; }
+    catch (error) {
+      const cooldown = Number(error.retryMs) > 0 ? Number(error.retryMs) : 8_000;
+      cache.set(cacheKey, {at:Date.now(), until:Date.now() + cooldown, error:error.message, value:previous});
+      if (previous) return previous;
+      if (!isNiftyIndex(symbol, market, code)) throw error;
+    }
   }
   if (!value) {
     if (!isNiftyIndex(symbol, market, code)) throw Error('Connect Sharekhan to load the 15-minute chart');
     value = await niftyIndexCandles(fetchImpl);
   }
-  cache.set(cacheKey, {at:Date.now(), value});
+  cache.set(cacheKey, {at:Date.now(), until:0, error:'', value});
   return value;
 }

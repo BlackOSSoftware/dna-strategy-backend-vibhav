@@ -13,6 +13,7 @@ test('day report and net position payloads become order book rows', () => {
     filled: '65',
     price: 83.3,
     status: 'Fully Executed',
+    reason: '',
     product: 'INVESTMENT',
     exchange: 'NF'
   });
@@ -20,6 +21,8 @@ test('day report and net position payloads become order book rows', () => {
   assert.equal(mapPosition(positions[0]).side, 'BUY');
   assert.equal(mapPosition(positions[0]).quantity, '65');
   assert.equal(mapPosition(positions[0]).pnl, 110.5);
+  const rejected = mapOrder({orderId:'210003475', orderStatus:'Exchange Rejected', errorMsg:'You have insufficient funds. You require Rs. 289.20 to place this order'});
+  assert.equal(rejected.reason, 'You have insufficient funds. You require Rs. 289.20 to place this order');
 });
 
 test('cash balance is read from the Sharekhan fund statement', () => {

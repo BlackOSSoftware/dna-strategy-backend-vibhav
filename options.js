@@ -13,17 +13,28 @@ export function optionSide(right, direction) {
   return direction === 'short' ? 'PE' : 'CE';
 }
 
-export function detectNiftyOption(rows, {spot, moneyness = 'ATM', depth = 1, right = 'CE', asOf = new Date()} = {}) {
+const underlyingAliases = {
+  NIFTY50:'NIFTY', NIFTYBANK:'BANKNIFTY', BANKNIFTY:'BANKNIFTY',
+  NIFTYFINSERVICE:'FINNIFTY', FINNIFTY:'FINNIFTY', NIFTYMIDSELECT:'MIDCPNIFTY', MIDCPNIFTY:'MIDCPNIFTY'
+};
+
+export function optionUnderlying(symbol) {
+  const key = String(symbol || 'NIFTY').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return underlyingAliases[key] || key || 'NIFTY';
+}
+
+export function detectOption(rows, {symbol = 'NIFTY', spot, moneyness = 'ATM', depth = 1, right = 'CE', asOf = new Date()} = {}) {
+  const underlying = optionUnderlying(symbol);
   const price = Number(spot);
-  if (!Number.isFinite(price) || price <= 0) throw Error('Nifty price is not available yet');
+  if (!Number.isFinite(price) || price <= 0) throw Error(`${underlying} price is not available yet`);
   const side = String(right || '').toUpperCase();
   if (!['CE', 'PE'].includes(side)) throw Error('Choose CE or PE');
   const money = String(moneyness || '').toUpperCase();
   if (!['ATM', 'ITM', 'OTM'].includes(money)) throw Error('Choose ITM, ATM, or OTM');
   const steps = money === 'ATM' ? 0 : Math.max(1, Math.min(10, Math.trunc(Number(depth) || 1)));
   const today = todayKey(asOf);
-  const chain = rows.filter(row => String(row.tradingSymbol).toUpperCase() === 'NIFTY' && row.optionType === side && Number(row.strike) > 0 && expiryKey(row.expiry) >= today);
-  if (!chain.length) throw Error('No live Nifty option expiry was found');
+  const chain = rows.filter(row => String(row.tradingSymbol).toUpperCase() === underlying && row.optionType === side && Number(row.strike) > 0 && expiryKey(row.expiry) >= today);
+  if (!chain.length) throw Error(`No live ${underlying} option expiry was found`);
   const expiry = chain.map(row => row.expiry).sort((a, b) => expiryKey(a).localeCompare(expiryKey(b)))[0];
   const listed = chain.filter(row => row.expiry === expiry);
   const strikes = [...new Set(listed.map(row => Number(row.strike)))].sort((a, b) => a - b);
@@ -40,10 +51,14 @@ export function detectNiftyOption(rows, {spot, moneyness = 'ATM', depth = 1, rig
   const strike = strikes[index];
   const match = listed.find(row => Number(row.strike) === strike);
   return {
-    tradingSymbol:'NIFTY', exchange:'NF', scripCode:String(match.scripCode), expiry:match.expiry, strike,
+    tradingSymbol:underlying, exchange:'NF', scripCode:String(match.scripCode), expiry:match.expiry, strike,
     optionType:side, moneyness:steps === 0 ? 'ATM' : money, depth:steps, lotSize:Number(match.lotSize) || 0,
-    tickSize:Number(match.tickSize) > 0 ? Number(match.tickSize) : 0.05, spot:price, label:`NIFTY ${strike} ${side}`
+    tickSize:Number(match.tickSize) > 0 ? Number(match.tickSize) : 0.05, spot:price, label:`${underlying} ${strike} ${side}`
   };
+}
+
+export function detectNiftyOption(rows, options = {}) {
+  return detectOption(rows, {...options, symbol:'NIFTY'});
 }
 
 function moneyRound(value, tick) {
@@ -82,6 +97,7 @@ export function optionGridRows({price, side = 'buy', gridStep, targetPoints, ini
 }
 
 const quoteCache = {at:0, cookie:'', books:new Map()};
+const chainInflight = new Map();
 const nseHeaders = {'User-Agent':'Mozilla/5.0', Accept:'application/json', Referer:'https://www.nseindia.com/'};
 
 function nseExpiry(value) {
@@ -99,12 +115,20 @@ async function nseCookie(fetchImpl) {
   return quoteCache.cookie;
 }
 
-async function nseChain(expiry, fetchImpl, maxAge = 15000) {
-  const key = nseExpiry(expiry);
+const indexUnderlyings = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']);
+
+async function nseChain(symbol, expiry, fetchImpl, maxAge = 15000) {
+  const underlying = optionUnderlying(symbol);
+  const key = `${underlying}:${nseExpiry(expiry)}`;
   const cached = quoteCache.books.get(key);
-  if (cached && Date.now() - cached.at < maxAge) return cached.rows;
+  if (cached?.rows && Date.now() - cached.at < maxAge) return cached.rows;
+  if (cached?.error && Date.now() < cached.until) {
+    if (cached.rows) return cached.rows;
+    throw Error(cached.error);
+  }
   const load = async () => {
-    const response = await fetchImpl(`https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY&expiry=${encodeURIComponent(key)}`, {
+    const type = indexUnderlyings.has(underlying) ? 'Indices' : 'Equity';
+    const response = await fetchImpl(`https://www.nseindia.com/api/option-chain-v3?type=${type}&symbol=${encodeURIComponent(underlying)}&expiry=${encodeURIComponent(nseExpiry(expiry))}`, {
       headers:{...nseHeaders, Cookie:await nseCookie(fetchImpl)},
       signal:AbortSignal.timeout(8000)
     });
@@ -114,16 +138,21 @@ async function nseChain(expiry, fetchImpl, maxAge = 15000) {
     quoteCache.books.set(key, {at:Date.now(), rows});
     return rows;
   };
-  try { return await load(); }
-  catch (error) {
+  const pending = chainInflight.get(key);
+  if (pending) return pending;
+  const job = load().catch(error => {
     quoteCache.cookie = '';
+    quoteCache.books.set(key, {at:cached?.at || 0, rows:cached?.rows, error:error.message, until:Date.now() + 8_000});
     if (cached?.rows) return cached.rows;
     throw error;
-  }
+  });
+  chainInflight.set(key, job);
+  try { return await job; }
+  finally { chainInflight.delete(key); }
 }
 
-export async function optionPremium({expiry, strike, right, fetchImpl = fetch, maxAge = 15000}) {
-  const rows = await nseChain(expiry, fetchImpl, maxAge);
+export async function optionPremium({expiry, strike, right, symbol = 'NIFTY', fetchImpl = fetch, maxAge = 15000}) {
+  const rows = await nseChain(symbol, expiry, fetchImpl, maxAge);
   const price = Number(strike);
   const side = String(right || '').toUpperCase();
   const match = rows.find(row => Number(row.strikePrice) === price || Number(row[side]?.strikePrice) === price);
@@ -134,6 +163,6 @@ export async function optionPremium({expiry, strike, right, fetchImpl = fetch, m
 }
 
 export async function withOptionGrid(contract, settings, fetchImpl = fetch) {
-  const quote = await optionPremium({expiry:contract.expiry, strike:contract.strike, right:contract.optionType, fetchImpl, maxAge:settings.maxAge ?? 15000});
+  const quote = settings.quote || await optionPremium({expiry:contract.expiry, strike:contract.strike, right:contract.optionType, symbol:contract.tradingSymbol, fetchImpl, maxAge:settings.maxAge ?? 15000});
   return {...contract, side:settings.side, price:quote.price, bid:quote.bid, ask:quote.ask, nifty:quote.underlying, grid:optionGridRows({price:quote.price, ...settings})};
 }

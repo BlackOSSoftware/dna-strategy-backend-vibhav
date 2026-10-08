@@ -26,6 +26,15 @@ test('an open live buy exits on the stop or target and trails after the third fi
   assert.equal(liveIntents([{...orders[0], stop:80}], 112)[0].reason, 'target');
 });
 
+test('an exchange rejection stays rejected and is not sent again', () => {
+  const orders = [{level:1, side:'buy', entry:43.9, target:55.9, stop:23.9, status:'pending', brokerOrderId:'210003475'}];
+  applyBrokerFills(orders, [{orderId:'210003475', status:'Exchange Rejected', reason:'You have insufficient funds. You require Rs. 289.20 to place this order'}]);
+  assert.equal(orders[0].status, 'rejected');
+  assert.equal(orders[0].brokerOrderId, '210003475');
+  assert.match(orders[0].rejectReason, /insufficient funds/);
+  assert.deepEqual(liveIntents(orders, 80), []);
+});
+
 test('broker fills open the entry and close the exit once', () => {
   const orders = [{level:1, side:'buy', entry:100, target:112, stop:80, status:'pending', brokerOrderId:'9', exitBrokerOrderId:'', exitReason:'target'}];
   applyBrokerFills(orders, [{orderId:'9', status:'Fully Executed', quantity:'65', filled:'65', price:100}]);
