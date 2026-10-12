@@ -109,6 +109,36 @@ async function niftyIndexCandles(fetchImpl) {
   return {exchange:'NC', scripCode:'20000', interval:'15m', source:'nse-index', candles, last:candles.at(-1)};
 }
 
+function istDayStart(ms = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date(ms));
+  const get = type => parts.find(part => part.type === type)?.value;
+  return Math.floor(Date.parse(`${get('year')}-${get('month')}-${get('day')}T00:00:00+05:30`) / 1000);
+}
+
+export function newerCandles(base, extra) {
+  const rows = (base || []).map(({smaClose, smaOpen, ...candle}) => candle);
+  const last = Number(rows.at(-1)?.time) || 0;
+  const seen = new Set(rows.map(candle => candle.time));
+  for (const candle of extra || []) {
+    if (Number(candle.time) > last && !seen.has(candle.time)) rows.push(candle);
+  }
+  rows.sort((a, b) => a.time - b.time);
+  return withAverages(rows).slice(-500);
+}
+
+async function fillNiftySession(value, fetchImpl) {
+  const last = Number(value?.last?.time) || 0;
+  if (last >= istDayStart()) return value;
+  try {
+    const extra = await niftyIndexCandles(fetchImpl);
+    const candles = newerCandles(value.candles, extra.candles);
+    if (candles.length === value.candles.length) return value;
+    return {...value, candles, last:candles.at(-1), source:'sharekhan+index'};
+  } catch {
+    return value;
+  }
+}
+
 function isNiftyIndex(symbol, exchange, scripCode) {
   return String(exchange).toUpperCase() === 'NC' && (String(scripCode) === '20000' || String(symbol || '').toUpperCase() === 'NIFTY');
 }
@@ -144,6 +174,7 @@ async function loadCandles({market, code, symbol, apiKey, accessToken, fetchImpl
       if (!isNiftyIndex(symbol, market, code)) throw error;
     }
   }
+  if (value && isNiftyIndex(symbol, market, code)) value = await fillNiftySession(value, fetchImpl);
   if (!value) {
     if (!isNiftyIndex(symbol, market, code)) throw Error('Connect Sharekhan to load the 15-minute chart');
     value = await niftyIndexCandles(fetchImpl);

@@ -23,6 +23,28 @@ test('option history uses Sharekhan tradeDate and tradeTime', async () => {
   assert.equal(result.candles[0].time, Date.parse('2026-10-05T09:29:56+05:30') / 1000);
 });
 
+test('Nifty chart adds today when Sharekhan history stops on the previous session', async () => {
+  const today = Date.parse('2026-10-12T15:15:00+05:30') / 1000;
+  const result = await marketCandles({
+    exchange: 'NC',
+    scripCode: '20000',
+    symbol: 'NIFTY',
+    apiKey: 'key',
+    accessToken: 'token',
+    fetchImpl: async url => {
+      const text = String(url);
+      if (text.includes('/historical/')) {
+        return {ok:true, status:200, json:async () => ({message:'chart', data:[{open:22520, high:22520, low:22520, close:22520, qty:1, tradeTime:'15:29:42', tradeDate:'9/10/2026'}]})};
+      }
+      return {ok:true, status:200, json:async () => ({chart:{result:[{timestamp:[today], indicators:{quote:[{open:[22340], high:[22380], low:[22320], close:[22355], volume:[100]}]}}]}})};
+    }
+  });
+  assert.equal(result.source, 'sharekhan+index');
+  assert.equal(result.candles.length, 2);
+  assert.equal(result.candles.at(-1).close, 22355);
+  assert.equal(result.candles.at(-1).time, today);
+});
+
 test('a Sharekhan 429 is not retried until the cooldown ends', async () => {
   let calls = 0;
   const fetchImpl = async (url) => {
