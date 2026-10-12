@@ -146,7 +146,8 @@ async function fillNiftySession(value, fetchImpl) {
 }
 
 function isNiftyIndex(symbol, exchange, scripCode) {
-  return String(exchange).toUpperCase() === 'NC' && (String(scripCode) === '20000' || String(symbol || '').toUpperCase() === 'NIFTY');
+  const name = String(symbol || '').toUpperCase();
+  return name === 'NIFTY' || name === 'NIFTY50' || (String(exchange).toUpperCase() === 'NC' && String(scripCode) === '20000');
 }
 
 export async function marketCandles({exchange, scripCode, symbol = '', apiKey, accessToken, fetchImpl = fetch, liveCandles = []}) {

@@ -45,6 +45,24 @@ test('Nifty chart adds today when Sharekhan history stops on the previous sessio
   assert.equal(result.candles.at(-1).time, today);
 });
 
+test('Nifty on the F&O scrip falls back when Sharekhan has no candles', async () => {
+  const today = Date.parse('2026-10-12T15:15:00+05:30') / 1000;
+  const result = await marketCandles({
+    exchange: 'NF',
+    scripCode: '41743-empty',
+    symbol: 'NIFTY',
+    apiKey: 'key',
+    accessToken: 'token',
+    fetchImpl: async url => {
+      const text = String(url);
+      if (text.includes('/historical/')) return {ok:true, status:204, json:async () => null};
+      return {ok:true, status:200, json:async () => ({chart:{result:[{timestamp:[today], indicators:{quote:[{open:[22340], high:[22380], low:[22320], close:[22355], volume:[10]}]}}]}})};
+    }
+  });
+  assert.equal(result.candles.at(-1).close, 22355);
+  assert.equal(result.candles.at(-1).time, today);
+});
+
 test('a Sharekhan 429 is not retried until the cooldown ends', async () => {
   let calls = 0;
   const fetchImpl = async (url) => {
