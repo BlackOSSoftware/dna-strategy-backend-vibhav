@@ -331,7 +331,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET'&&url.pathname==='/api/state')return reply(res,200,engine.snapshot());
     if(req.method==='GET'&&url.pathname==='/api/instruments/meta')return reply(res,200,instrumentMeta());
     if(req.method==='GET'&&url.pathname==='/api/instruments')return reply(res,200,await searchInstruments(url.searchParams.get('exchange'),url.searchParams.get('q')));
-    if(req.method==='GET'&&url.pathname==='/api/market')return reply(res,200,await marketCandles({exchange:url.searchParams.get('exchange')||engine.config.exchange,scripCode:url.searchParams.get('scripCode')||engine.config.scripCode,symbol:url.searchParams.get('symbol')||engine.config.symbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()}));
+    if(req.method==='GET'&&url.pathname==='/api/market'){const exchange=url.searchParams.get('exchange')||engine.config.exchange;const scripCode=url.searchParams.get('scripCode')||engine.config.scripCode;return reply(res,200,await marketCandles({exchange,scripCode,symbol:url.searchParams.get('symbol')||engine.config.symbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),liveCandles:chartFeed.candlesFor(exchange,scripCode)}));}
     if(req.method==='GET'&&url.pathname==='/api/option')return reply(res,200,await optionBoard(url));
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/status')return reply(res,200,await verifyBroker());
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/book')return reply(res,200,await brokerBook());

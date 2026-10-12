@@ -115,6 +115,12 @@ function istDayStart(ms = Date.now()) {
   return Math.floor(Date.parse(`${get('year')}-${get('month')}-${get('day')}T00:00:00+05:30`) / 1000);
 }
 
+export function withLiveCandles(value, liveCandles) {
+  if (!value?.candles?.length || !liveCandles?.length) return value;
+  const candles = newerCandles(value.candles, liveCandles);
+  if (candles.length === value.candles.length) return value;
+  return {...value, candles, last:candles.at(-1)};
+}
 export function newerCandles(base, extra) {
   const rows = (base || []).map(({smaClose, smaOpen, ...candle}) => candle);
   const last = Number(rows.at(-1)?.time) || 0;
@@ -143,23 +149,24 @@ function isNiftyIndex(symbol, exchange, scripCode) {
   return String(exchange).toUpperCase() === 'NC' && (String(scripCode) === '20000' || String(symbol || '').toUpperCase() === 'NIFTY');
 }
 
-export async function marketCandles({exchange, scripCode, symbol = '', apiKey, accessToken, fetchImpl = fetch}) {
+export async function marketCandles({exchange, scripCode, symbol = '', apiKey, accessToken, fetchImpl = fetch, liveCandles = []}) {
   const code = String(scripCode || '').trim();
   const market = String(exchange || '').trim().toUpperCase();
   if (!code) throw Error('Choose a scrip from the search list to load the chart');
+  const finish = value => withLiveCandles(value, liveCandles);
   const cacheKey = `${market}:${code}:${accessToken ? 'sharekhan' : 'index'}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
-  if (cached?.value && now - cached.at < 60_000) return cached.value;
+  if (cached?.value && now - cached.at < 60_000) return finish(cached.value);
   if (cached?.error && now < cached.until) {
-    if (cached.value) return cached.value;
+    if (cached.value) return finish(cached.value);
     throw Error(cached.error);
   }
   const pending = inflight.get(cacheKey);
   if (pending) return pending;
   const job = loadCandles({market, code, symbol, apiKey, accessToken, fetchImpl, cacheKey, previous:cached?.value || null});
   inflight.set(cacheKey, job);
-  try { return await job; }
+  try { return finish(await job); }
   finally { inflight.delete(cacheKey); }
 }
 

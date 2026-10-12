@@ -9,6 +9,7 @@ export function createSharekhanFeed({WebSocketImpl = WebSocket} = {}) {
   let apiKey = '';
   let keys = [];
   const prices = new Map();
+  const candles = new Map();
   let retryAt = 0;
   let heartbeat = null;
 
@@ -36,7 +37,10 @@ export function createSharekhanFeed({WebSocketImpl = WebSocket} = {}) {
       const id = `${tick?.exchangeCode || ''}${code}`;
       const ltp = Number(tick?.ltp);
       const match = ltp > 0 && code ? (keys.includes(id) ? id : keys.find(key => key.endsWith(code))) : '';
-      if (match) prices.set(match, ltp);
+      if (match) {
+        prices.set(match, ltp);
+        rememberCandle(match, ltp, tick);
+      }
     }
   }
 
@@ -80,6 +84,47 @@ export function createSharekhanFeed({WebSocketImpl = WebSocket} = {}) {
     });
   }
 
+  function tickTime(tick) {
+    const raw = String(tick?.lastUpdatedTime || tick?.lastUpdTime || tick?.ltt || '').trim();
+    const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (!match) return Date.now();
+    const iso = `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}T${match[4] || '00'}:${match[5] || '00'}:${match[6] || '00'}+05:30`;
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : Date.now();
+  }
+
+  function bucketStart(ms) {
+    const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).formatToParts(new Date(ms));
+    const get = type => parts.find(part => part.type === type)?.value;
+    const hour = get('hour') === '24' ? '00' : get('hour');
+    const minute = String(Math.floor(Number(get('minute')) / 15) * 15).padStart(2, '0');
+    return Math.floor(Date.parse(`${get('year')}-${get('month')}-${get('day')}T${hour}:${minute}:00+05:30`) / 1000);
+  }
+
+  function rememberCandle(id, ltp, tick) {
+    const when = tickTime(tick);
+    const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).formatToParts(new Date(when));
+    const hour = parts.find(part => part.type === 'hour')?.value;
+    const minute = (hour === '24' ? 0 : Number(hour)) * 60 + Number(parts.find(part => part.type === 'minute')?.value);
+    if (minute < 9 * 60 + 15 || minute >= 15 * 60 + 30) return;
+    const bucket = bucketStart(when);
+    const rows = candles.get(id) || [];
+    const last = rows.at(-1);
+    if (!last || last.time !== bucket) {
+      if (last && bucket < last.time) return;
+      rows.push({time:bucket, open:ltp, high:ltp, low:ltp, close:ltp});
+      candles.set(id, rows.slice(-40));
+      return;
+    }
+    last.high = Math.max(last.high, ltp);
+    last.low = Math.min(last.low, ltp);
+    last.close = ltp;
+  }
+
+  function candlesFor(exchange, scripCode) {
+    return [...(candles.get(instrumentId(exchange, scripCode)) || [])];
+  }
+
   function instrumentId(exchange, scripCode) {
     const code = String(scripCode || '').trim();
     if (!code) return '';
@@ -118,5 +163,5 @@ export function createSharekhanFeed({WebSocketImpl = WebSocket} = {}) {
     try { opened?.close(); } catch { /* Closing a finished socket is safe. */ }
   }
 
-  return {watch, quotes, stop, receive};
+  return {watch, quotes, candlesFor, stop, receive};
 }

@@ -32,6 +32,9 @@ test('Sharekhan live feed subscribes to the chart scrip and keeps its price', ()
   assert.equal(socket.sent.at(-1).value[0], 'NC20000,NF50001');
   socket.emit('message', JSON.stringify({status:100, message:'feed', data:[{exchangeCode:'NC', scripCode:'20000', ltp:22510}, {exchangeCode:'NF', scripCode:'50001', ltp:48.5}]}));
   assert.equal(both.get('NC20000'), 22510);
-  assert.equal(both.get('NF50001'), 48.5);
+  socket.emit('message', JSON.stringify({status:100, message:'feed', data:{exchangeCode:'NF', scripCode:'50001', ltp:48.5, lastUpdTime:'10/12/2026 12:16:10'}}));
+  const candle = feed.candlesFor('NF', '50001').at(-1);
+  assert.equal(candle.close, 48.5);
+  assert.equal(candle.time, Math.floor(Date.parse('2026-10-12T12:15:00+05:30') / 1000));
   feed.stop();
 });
