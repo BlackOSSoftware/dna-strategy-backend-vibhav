@@ -32,9 +32,11 @@ export function createSharekhanFeed({WebSocketImpl = WebSocket} = {}) {
     if (message.message !== 'feed') return;
     const ticks = Array.isArray(message.data) ? message.data : [message.data];
     for (const tick of ticks) {
-      const id = `${tick?.exchangeCode || ''}${tick?.scripCode || ''}`;
+      const code = String(tick?.scripCode ?? '');
+      const id = `${tick?.exchangeCode || ''}${code}`;
       const ltp = Number(tick?.ltp);
-      if (keys.includes(id) && ltp > 0) prices.set(id, ltp);
+      const match = ltp > 0 && code ? (keys.includes(id) ? id : keys.find(key => key.endsWith(code))) : '';
+      if (match) prices.set(match, ltp);
     }
   }
 
