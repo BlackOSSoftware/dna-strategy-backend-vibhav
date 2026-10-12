@@ -7,8 +7,9 @@ import {SharekhanAuth} from './sharekhan-auth.js';
 import {StrategyStore} from './store.js';
 import {assertInstrument,instrumentMeta,niftyOptionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
 import {marketCandles} from './market.js';
-import {detectOption,optionPremium,optionSide,optionUnderlying,withOptionGrid} from './options.js';
+import {detectOption,optionPremium,optionSide,optionUnderlying,premiumAt,withOptionGrid} from './options.js';
 import {attachLive} from './live.js';
+import {createSharekhanFeed} from './sharekhan-feed.js';
 import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
 import {submitLiveOrder} from './sharekhan-orders.js';
@@ -94,18 +95,57 @@ async function optionBoard(url,maxAge=15000){
   if(contract?.scripCode&&!liveLocked&&!sameContract){engine.optionOrders=[];engine.option=contract;await save();}
   else if(!previewOnly&&!keepExisting&&contract?.scripCode&&!liveLocked&&(engine.option?.tradingSymbol!==contract.tradingSymbol||Number(engine.option?.strike)!==Number(contract.strike)||engine.option?.optionType!==contract.optionType)){engine.option=contract;await save();}
   if(Number(contract?.tickSize)>0)settings.tickSize=Number(contract.tickSize);
+  const gridSource=(url.searchParams.get('gridSource')||engine.config.gridSource)==='signal'?'signal':'premium';
+  if(engine.config.gridSource!==gridSource){engine.config.gridSource=gridSource;await save();}
+  settings.gridSource=gridSource;
   let quote=null;
   try{quote=await optionQuote(contract);}catch(error){quote={error};}
   let board;
-  try{if(quote?.error)throw quote.error;board=await withOptionGrid(contract,{...settings,quote});}
-  catch(error){board={...contract,side:settings.side,price:null,grid:[],gridError:error.message};}
-  if(board.price){
-    const before=JSON.stringify(engine.optionOrders||[]);
-    engine.markOptionPrice(board.price);
-    if(JSON.stringify(engine.optionOrders||[])!==before)await save();
+  try{
+    if(quote?.error)throw quote.error;
+    if(gridSource==='signal'){
+      const found=await signalOptionAnchor(contract,direction);
+      if(found.error)throw Error(found.error);
+      settings.anchor=found.price;
+      settings.signalTime=found.time;
+    }
+    board=await withOptionGrid(contract,{...settings,quote});
   }
+  catch(error){board={...contract,side:settings.side,price:quote?.price||null,anchor:null,gridSource,signalTime:settings.signalTime||null,grid:[],gridError:error.message};}
+  const ordersBefore=JSON.stringify(engine.optionOrders||[]);
+  if(board.grid?.length)applyGridAnchor(board);
+  if(board.price)engine.markOptionPrice(board.price);
+  if(JSON.stringify(engine.optionOrders||[])!==ordersBefore)await save();
   board.orders=String(engine.option?.scripCode||'')===String(contract?.scripCode||'')?engine.orders():[];
   return board;
+}
+async function signalOptionAnchor(contract, direction){
+  let signal=null;
+  if(engine.tradeMode==='live'&&engine.status==='running')signal=engine.signal?.time?engine.signal:null;
+  else{
+    const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol:engine.config.symbol||'NIFTY',apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+    signal=sessionSignal(market.candles||[],{direction:direction==='short'?'short':'buy',after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd});
+  }
+  if(!signal?.time)return {error:engine.tradeMode==='live'&&engine.status==='running'?'Signal price waits for the next signal after the strategy starts.':'Signal price waits for today\'s confirmed signal.'};
+  const history=await marketCandles({exchange:contract.exchange||'NF',scripCode:contract.scripCode,symbol:contract.tradingSymbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+  const price=premiumAt(history.candles,signal.time);
+  if(!(price>0))return {error:'The option premium at the signal time is not in the chart yet.'};
+  return {price,time:signal.time};
+}
+function applyGridAnchor(board){
+  const source=board.gridSource==='signal'?'signal':'premium';
+  const key=source==='signal'?`signal:${board.scripCode||''}:${board.anchor||''}`:`premium:${board.scripCode||''}`;
+  const locked=engine.orders().some(order=>order.brokerOrderId||order.exitBrokerOrderId||order.status==='open'||order.status==='pending'||order.status==='rejected');
+  if(!board.grid?.length)return;
+  const install=()=>{
+    const side=board.side==='short'?'short':'buy';
+    engine.optionOrders=board.grid.map(row=>engine.draftOrder({...row,side,quantity:engine.config.quantity}));
+    engine.gridKey=key;
+  };
+  if(source==='signal'&&!engine.orders().length)return install();
+  if(!locked&&engine.gridKey&&engine.gridKey!==key)return install();
+  if(locked&&engine.gridKey&&engine.gridKey!==key)board.gridHeld=true;
+  if(!engine.gridKey)engine.gridKey=key;
 }
 async function resolveOption(config,direction,spot){
   const symbol=optionUnderlying(engine.config.symbol||'NIFTY');
@@ -136,6 +176,7 @@ async function brokerBook(){
   bookCache={at:Date.now(),value};
   return value;
 }
+const chartFeed=createSharekhanFeed();
 let liveBusy=false, liveAt=0, signalAt=0;
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
@@ -367,9 +408,15 @@ async function start(){
       if(engine.tradeMode==='live'&&engine.signal?.spot>0)url.searchParams.set('spot',String(engine.signal.spot));
       else if(engine.tradeMode!=='live'&&engine.option?.strike&&engine.option?.expiry){url.searchParams.set('strike',engine.option.strike);url.searchParams.set('expiry',engine.option.expiry);url.searchParams.set('right',engine.option.optionType);url.searchParams.set('scrip',engine.option.scripCode||'');}
       const board=await optionBoard(url,2000);
-      if(engine.mode==='live')await executeLiveGrid(board);
-      if(!board?.price)return {error:board?.gridError||'Waiting for the option price'};
-      return {nifty:board.nifty,price:board.price,bid:board.bid,ask:board.ask,label:board.label,side:board.side,orders:(board.orders||[]).map(order=>({level:order.level,status:order.status,entry:order.entry}))};
+      const liveSymbols=[{exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode}];
+      if(engine.option?.scripCode)liveSymbols.push({exchange:engine.option.exchange||'NF',scripCode:engine.option.scripCode});
+      const liveQuotes=chartFeed.quotes(liveSymbols, process.env.SHAREKHAN_API_KEY, broker.accessToken());
+      const chartLtp=liveQuotes.get(`${String(engine.config.exchange||'NC').toUpperCase()}${String(engine.config.scripCode||'').trim()}`)||null;
+      const optionLtp=engine.option?.scripCode?liveQuotes.get(`${String(engine.option.exchange||'NF').toUpperCase()}${String(engine.option.scripCode).trim()}`)||null:null;
+      const price=optionLtp||board.price;
+      if(engine.mode==='live')await executeLiveGrid({...board,price});
+      if(!price && !chartLtp)return {error:board?.gridError||'Waiting for the option price'};
+      return {nifty:chartLtp||board.nifty,price,bid:board.bid,ask:board.ask,label:board.label,side:board.side,orders:(board.orders||[]).map(order=>({level:order.level,status:order.status,entry:order.entry}))};
     }});
   });
 }

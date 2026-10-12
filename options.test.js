@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying} from './options.js';
+import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt} from './options.js';
 
 const asOf = new Date('2026-10-05T08:30:00+05:30');
 const rows = [];
@@ -54,4 +54,20 @@ test('option premium grid is independent of the Nifty index', () => {
   const short = optionGridRows({price:93.4, side:'short', gridStep:7, targetPoints:12, initialStop:20, maxLegs:2, tickSize:0.05, trailStartLeg:3});
   assert.equal(short[0].target, 81.4);
   assert.equal(short[1].entry, 86.4);
+});
+
+test('signal premium anchors the grid while distance follows the live premium', () => {
+  const signalTime = Date.parse('2026-10-08T12:00:00+05:30') / 1000;
+  const candles = [
+    {time: signalTime - 15 * 60, close: 30},
+    {time: signalTime, close: 40.5},
+    {time: signalTime + 15 * 60, close: 55}
+  ];
+  assert.equal(premiumAt(candles, signalTime), 40.5);
+  assert.equal(premiumAt(candles, new Date(signalTime * 1000).toISOString()), 40.5);
+  assert.equal(premiumAt(candles, signalTime + 3 * 60 * 60), null);
+  const rows = optionGridRows({price:55, anchor:40.5, side:'buy', gridStep:7, targetPoints:12, initialStop:20, maxLegs:2, tickSize:0.05, trailStartLeg:3});
+  assert.equal(rows[0].entry, 40.5);
+  assert.equal(rows[1].entry, 47.5);
+  assert.equal(rows[0].distance, -14.5);
 });

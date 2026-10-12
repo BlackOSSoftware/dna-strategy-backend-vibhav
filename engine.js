@@ -4,7 +4,8 @@ export const defaults = Object.freeze({
   initialStop: 20, trailStartLeg: 3, trailStep: 8,
   maxLoss: 5000, maxProfit: 20000, tickSize: 0.05,
   strategyStart: '09:15', strategyEnd: '15:15',
-  optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO'
+  optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO',
+  gridSource: 'premium'
 });
 const clockValue = value => {
   const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
@@ -82,6 +83,7 @@ export class Strategy {
     if (!['AUTO', 'CE', 'PE'].includes(right)) throw Error('Choose Auto, CE, or PE');
     if (!Number.isInteger(depth) || depth < 1 || depth > 10) throw Error('Strikes away must be from 1 to 10');
     next.optionMoneyness = moneyness; next.optionRight = right; next.optionDepth = depth;
+    next.gridSource = next.gridSource === 'signal' ? 'signal' : 'premium';
     next.symbol = String(next.symbol || '').trim().toUpperCase();
     if (!next.symbol) throw Error('Symbol is required');
     this.config = next; this.log('settings',`Strategy settings updated · ${start}–${end} IST`); return this.snapshot();
@@ -336,5 +338,5 @@ export class Strategy {
   }
   snapshot() { return {config:this.config,direction:this.direction,status:this.status,mode:this.mode,tradeMode:this.tradeMode||'existing',signal:this.signal||null,startedAt:this.startedAt||null,day:this.day,
     candles:this.candles,pending:this.pending,legs:this.legs,history:this.history,events:this.events,
-    realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice}; }
+    realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice,gridKey:this.gridKey||''}; }
 }

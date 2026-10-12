@@ -67,7 +67,7 @@ function moneyRound(value, tick) {
   return Math.round((Math.round(value / tick) * tick) * factor) / factor;
 }
 
-export function optionGridRows({price, side = 'buy', gridStep, targetPoints, initialStop, maxLegs = 4, tickSize = 0.05, trailStartLeg = 3, trailStep = 8} = {}) {
+export function optionGridRows({price, anchor = null, side = 'buy', gridStep, targetPoints, initialStop, maxLegs = 4, tickSize = 0.05, trailStartLeg = 3, trailStep = 8} = {}) {
   const premium = Number(price);
   const step = Number(gridStep);
   const target = Number(targetPoints);
@@ -76,18 +76,20 @@ export function optionGridRows({price, side = 'buy', gridStep, targetPoints, ini
   const tick = Number(tickSize) > 0 ? Number(tickSize) : 0.05;
   const sharedFrom = Math.trunc(Number(trailStartLeg) || 3);
   const trail = Number(trailStep) > 0 ? Number(trailStep) : 8;
+  const basis = Number(anchor);
   if (![premium, step, target, stop].every(Number.isFinite) || premium <= 0) throw Error('Option price is not available for the grid');
+  if (anchor != null && anchor !== '' && !(basis > 0)) throw Error('Signal premium is not available for the grid');
   const sign = side === 'short' ? -1 : 1;
-  const anchor = moneyRound(premium, tick);
+  const anchorPrice = moneyRound(basis > 0 ? basis : premium, tick);
   return Array.from({length:legs}, (_, index) => {
     const level = index + 1;
-    const entry = moneyRound(anchor + sign * step * index, tick);
+    const entry = moneyRound(anchorPrice + sign * step * index, tick);
     const shared = level >= sharedFrom;
     return {
       level,
       entry,
       target:moneyRound(entry + sign * target, tick),
-      stop:shared ? anchor : moneyRound(entry - sign * stop, tick),
+      stop:shared ? anchorPrice : moneyRound(entry - sign * stop, tick),
       shared,
       trailPoints:shared ? trail : stop,
       trailText:shared ? `Trail ${trail} pts` : `${stop} pt stop`,
@@ -162,7 +164,21 @@ export async function optionPremium({expiry, strike, right, symbol = 'NIFTY', fe
   return {price:last, bid:Number(quote.buyPrice1) || null, ask:Number(quote.sellPrice1) || null, underlying:Number(quote.underlyingValue) || null};
 }
 
+export function premiumAt(candles, signalTime) {
+  const target = typeof signalTime === 'number' ? (signalTime > 1e12 ? Math.floor(signalTime / 1000) : signalTime) : Math.floor(Date.parse(signalTime) / 1000);
+  const rows = (candles || []).filter(candle => Number(candle?.close) > 0 && Number.isFinite(Number(candle.time)));
+  if (!rows.length || !Number.isFinite(target)) return null;
+  let best = null;
+  let gap = Infinity;
+  for (const row of rows) {
+    const delta = Math.abs(Number(row.time) - target);
+    if (delta < gap) { gap = delta; best = row; }
+  }
+  return best && gap <= 20 * 60 ? Number(best.close) : null;
+}
+
 export async function withOptionGrid(contract, settings, fetchImpl = fetch) {
   const quote = settings.quote || await optionPremium({expiry:contract.expiry, strike:contract.strike, right:contract.optionType, symbol:contract.tradingSymbol, fetchImpl, maxAge:settings.maxAge ?? 15000});
-  return {...contract, side:settings.side, price:quote.price, bid:quote.bid, ask:quote.ask, nifty:quote.underlying, grid:optionGridRows({price:quote.price, ...settings})};
+  const anchor = Number(settings.anchor) > 0 ? Number(settings.anchor) : quote.price;
+  return {...contract, side:settings.side, price:quote.price, bid:quote.bid, ask:quote.ask, nifty:quote.underlying, anchor, gridSource:settings.gridSource === 'signal' ? 'signal' : 'premium', signalTime:settings.signalTime || null, grid:optionGridRows({...settings, price:quote.price, anchor})};
 }
