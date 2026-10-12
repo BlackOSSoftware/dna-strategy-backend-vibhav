@@ -29,7 +29,7 @@ export function createSharekhanFeed({WebSocketImpl = WebSocket} = {}) {
       if (keys.length) send('feed', 'ltp', keys.join(','));
       return;
     }
-    if (message.message !== 'feed') return;
+    if (message.message !== 'feed' && message.message !== 'indices') return;
     const ticks = Array.isArray(message.data) ? message.data : [message.data];
     for (const tick of ticks) {
       const code = String(tick?.scripCode ?? '');
