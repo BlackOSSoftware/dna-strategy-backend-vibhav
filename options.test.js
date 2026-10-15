@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt} from './options.js';
+import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt, selectUnderlying} from './options.js';
 
 const asOf = new Date('2026-10-05T08:30:00+05:30');
 const rows = [];
@@ -41,6 +41,22 @@ test('detects the selected underlying, including Bank Nifty and Reliance', () =>
   assert.equal(reliance.strike, 1200);
   assert.equal(reliance.tradingSymbol, 'RELIANCE');
   assert.equal(reliance.exchange, 'NF');
+});
+
+test('crude oil uses its own future price instead of another symbol option', () => {
+  const chain = [
+    {tradingSymbol:'BANKNIFTY', expiry:'27/10/2026', strike:55500, optionType:'CE', scripCode:1, lotSize:30, tickSize:0.05},
+    {tradingSymbol:'CRUDEOIL', expiry:'19/11/2026', strike:0, optionType:'FUT', scripCode:20, lotSize:100, tickSize:1},
+    {tradingSymbol:'CRUDEOIL', expiry:'19/10/2026', strike:0, optionType:'FUT', scripCode:10, lotSize:100, tickSize:1},
+    {tradingSymbol:'CRUDEOIL', expiry:'15/10/2026', strike:3200, optionType:'CE', scripCode:581885, lotSize:100, tickSize:0.1},
+    {tradingSymbol:'CRUDEOIL', expiry:'15/10/2026', strike:5500, optionType:'CE', scripCode:30, lotSize:100, tickSize:0.1},
+    {tradingSymbol:'CRUDEOIL', expiry:'15/10/2026', strike:5550, optionType:'CE', scripCode:31, lotSize:100, tickSize:0.1}
+  ];
+  assert.equal(selectUnderlying(chain, {symbol:'CRUDEOIL', scripCode:'581885', asOf}).scripCode, 10);
+  const contract = detectOption(chain, {symbol:'CRUDEOIL', exchange:'MX', spot:5520, moneyness:'ATM', right:'CE', asOf});
+  assert.equal(contract.label, 'CRUDEOIL 5500 CE');
+  assert.equal(contract.exchange, 'MX');
+  assert.notEqual(contract.tradingSymbol, 'BANKNIFTY');
 });
 
 test('option premium grid is independent of the Nifty index', () => {

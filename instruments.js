@@ -85,6 +85,15 @@ async function master(exchange) {
   return job;
 }
 
+function expirySort(value) {
+  const match = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return match ? `${match[3]}${match[2]}${match[1]}` : '00000000';
+}
+
+function asksForContract(query) {
+  return /\b(CE|PE|FUT)\b/.test(query) || /\d/.test(query);
+}
+
 function rank(row, query) {
   const symbol = row.tradingSymbol.toUpperCase();
   const company = row.companyName.toUpperCase();
@@ -96,12 +105,14 @@ function rank(row, query) {
   const tokensMatch = parts.every(part => text.includes(part));
   const compactMatch = compactQuery.length > 1 && (compactName === compactQuery || symbol === compactQuery);
   if (!tokensMatch && !compactMatch) return 0;
-  if (symbol === query || code === query || company === query || compactName === compactQuery) return 100;
-  if (symbol.startsWith(query)) return 80;
-  if (company.startsWith(query)) return 70;
-  if (parts.length === 1 && symbol.includes(query)) return 50;
-  if (parts.length === 1 && (company.includes(query) || code.startsWith(query))) return 30;
-  return 20;
+  let score = 20;
+  if (symbol === query || code === query || company === query || compactName === compactQuery) score = 100;
+  else if (symbol.startsWith(query)) score = 80;
+  else if (company.startsWith(query)) score = 70;
+  else if (parts.length === 1 && symbol.includes(query)) score = 50;
+  else if (parts.length === 1 && (company.includes(query) || code.startsWith(query))) score = 30;
+  if (!asksForContract(query) && (row.optionType === 'CE' || row.optionType === 'PE')) score -= 50;
+  return score;
 }
 
 export function instrumentMeta() {
@@ -117,7 +128,7 @@ export async function searchInstruments(exchange, query) {
     const score = rank(row, q);
     if (score) scored.push({score, row});
   }
-  scored.sort((a, b) => b.score - a.score || a.row.tradingSymbol.localeCompare(b.row.tradingSymbol) || String(a.row.expiry).localeCompare(String(b.row.expiry)) || a.row.strike - b.row.strike);
+  scored.sort((a, b) => b.score - a.score || a.row.tradingSymbol.localeCompare(b.row.tradingSymbol) || expirySort(a.row.expiry).localeCompare(expirySort(b.row.expiry)) || a.row.strike - b.row.strike);
   return scored.slice(0, 20).map(({row}) => ({...row, detail:detail(row)}));
 }
 
@@ -138,8 +149,19 @@ export async function assertInstrument(input) {
   return input;
 }
 
+export function optionMarket(exchange) {
+  const code = String(exchange || '').trim().toUpperCase();
+  if (code === 'MX' || code === 'RN' || code === 'BF') return code;
+  if (code === 'BC') return 'BF';
+  return 'NF';
+}
+
 export function niftyOptionRows() {
   return master('NF');
+}
+
+export function optionRows(exchange) {
+  return master(optionMarket(exchange));
 }
 
 export function warmInstrumentCache() {

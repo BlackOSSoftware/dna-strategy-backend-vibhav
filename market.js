@@ -1,4 +1,8 @@
-const intervals = ['15minute'];
+const chartIntervals = new Set(['1minute', '5minute', '15minute', '30minute', '60minute']);
+function normalizeInterval(value) {
+  const interval = String(value || '15minute').toLowerCase();
+  return chartIntervals.has(interval) ? interval : '15minute';
+}
 const cache = new Map();
 const inflight = new Map();
 
@@ -63,58 +67,6 @@ function candlesFrom(payload) {
   return withAverages([...unique.values()].sort((a, b) => a.time - b.time)).slice(-500);
 }
 
-async function sharekhanHistory({market, code, apiKey, accessToken, fetchImpl}) {
-  let lastError = 'Sharekhan did not return 15-minute candles';
-  for (const interval of intervals) {
-    const response = await fetchImpl(`https://api.sharekhan.com/skapi/services/historical/${encodeURIComponent(market)}/${encodeURIComponent(code)}/${interval}`, {
-      headers:{Accept:'application/json', 'api-key':apiKey, 'access-token':accessToken},
-      signal:AbortSignal.timeout(20000)
-    });
-    const payload = await response.json().catch(() => null);
-    if (response.status === 401 || response.status === 403) throw Error('Sharekhan session is required for broker chart history');
-    if (response.status === 429) {
-      const retryAfter = Number(response.headers?.get?.('retry-after'));
-      const error = Error('Sharekhan history is rate-limited. The strike chart will retry shortly.');
-      error.retryMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 60_000) : 20_000;
-      throw error;
-    }
-    if (!response.ok) {
-      lastError = payload?.message || payload?.errorType || `Sharekhan history failed (HTTP ${response.status})`;
-      continue;
-    }
-    const candles = candlesFrom(payload);
-    if (!candles.length) {
-      lastError = 'Sharekhan returned no 15-minute candles for this scrip';
-      continue;
-    }
-    return {exchange:market, scripCode:code, interval, source:'sharekhan', candles, last:candles.at(-1)};
-  }
-  throw Error(lastError);
-}
-
-async function niftyIndexCandles(fetchImpl) {
-  const response = await fetchImpl('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=15m&range=5d', {
-    headers:{Accept:'application/json'},
-    signal:AbortSignal.timeout(20000)
-  });
-  const payload = await response.json().catch(() => null);
-  const quote = payload?.chart?.result?.[0]?.indicators?.quote?.[0];
-  const times = payload?.chart?.result?.[0]?.timestamp || [];
-  if (!response.ok || !quote || !times.length) throw Error('Nifty 15-minute candles are unavailable right now');
-  const rows = times.map((time, index) => ({
-    time, open:quote.open?.[index], high:quote.high?.[index], low:quote.low?.[index], close:quote.close?.[index], volume:quote.volume?.[index]
-  })).filter(row => [row.open, row.high, row.low, row.close].every(Number.isFinite));
-  const candles = withAverages(rows).slice(-500);
-  if (!candles.length) throw Error('Nifty 15-minute candles are unavailable right now');
-  return {exchange:'NC', scripCode:'20000', interval:'15m', source:'nse-index', candles, last:candles.at(-1)};
-}
-
-function istDayStart(ms = Date.now()) {
-  const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date(ms));
-  const get = type => parts.find(part => part.type === type)?.value;
-  return Math.floor(Date.parse(`${get('year')}-${get('month')}-${get('day')}T00:00:00+05:30`) / 1000);
-}
-
 export function withLiveCandles(value, liveCandles) {
   if (!value?.candles?.length || !liveCandles?.length) return value;
   const candles = newerCandles(value.candles, liveCandles);
@@ -132,60 +84,39 @@ export function newerCandles(base, extra) {
   return withAverages(rows).slice(-500);
 }
 
-async function fillNiftySession(value, fetchImpl) {
-  const last = Number(value?.last?.time) || 0;
-  if (last >= istDayStart()) return value;
-  try {
-    const extra = await niftyIndexCandles(fetchImpl);
-    const candles = newerCandles(value.candles, extra.candles);
-    if (candles.length === value.candles.length) return value;
-    return {...value, candles, last:candles.at(-1), source:'sharekhan+index'};
-  } catch {
-    return value;
-  }
-}
-
-function isNiftyIndex(symbol, exchange, scripCode) {
-  const name = String(symbol || '').toUpperCase();
-  return name === 'NIFTY' || name === 'NIFTY50' || (String(exchange).toUpperCase() === 'NC' && String(scripCode) === '20000');
-}
-
-export async function marketCandles({exchange, scripCode, symbol = '', apiKey, accessToken, fetchImpl = fetch, liveCandles = []}) {
+export async function marketCandles({exchange, scripCode, symbol = '', expiry, strike, optionType, interval = '15minute', angel, liveCandles = []}) {
+  if(!angel?.status().connected)throw Error('Connect Angel One for market data');
   const code = String(scripCode || '').trim();
   const market = String(exchange || '').trim().toUpperCase();
+  const frame = normalizeInterval(interval);
   if (!code) throw Error('Choose a scrip from the search list to load the chart');
-  const finish = value => withLiveCandles(value, liveCandles);
-  const cacheKey = `${market}:${code}:${accessToken ? 'sharekhan' : 'index'}`;
+  const finish = value => withLiveCandles(value, frame === '15minute' ? liveCandles : []);
+  const cacheKey = `${market}:${code}:${symbol}:${expiry||''}:${strike||''}:${frame}:angel`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
   if (cached?.value && now - cached.at < 60_000) return finish(cached.value);
   if (cached?.error && now < cached.until) {
-    if (cached.value) return finish(cached.value);
     throw Error(cached.error);
   }
   const pending = inflight.get(cacheKey);
   if (pending) return pending;
-  const job = loadCandles({market, code, symbol, apiKey, accessToken, fetchImpl, cacheKey, previous:cached?.value || null});
+  const job = loadCandles({market, code, symbol, expiry, strike, optionType, interval:frame, angel, cacheKey, previous:cached?.value || null});
   inflight.set(cacheKey, job);
   try { return finish(await job); }
   finally { inflight.delete(cacheKey); }
 }
 
-async function loadCandles({market, code, symbol, apiKey, accessToken, fetchImpl, cacheKey, previous}) {
+async function loadCandles({market, code, symbol, expiry, strike, optionType, interval, angel, cacheKey, previous}) {
+  if(!angel)throw Error('Angel market data is not configured');
   let value;
-  if (accessToken) {
-    try { value = await sharekhanHistory({market, code, apiKey, accessToken, fetchImpl}); }
-    catch (error) {
-      const cooldown = Number(error.retryMs) > 0 ? Number(error.retryMs) : 8_000;
-      cache.set(cacheKey, {at:Date.now(), until:Date.now() + cooldown, error:error.message, value:previous});
-      if (previous) return previous;
-      if (!isNiftyIndex(symbol, market, code)) throw error;
-    }
-  }
-  if (value && isNiftyIndex(symbol, market, code)) value = await fillNiftySession(value, fetchImpl);
-  if (!value) {
-    if (!isNiftyIndex(symbol, market, code)) throw Error('Connect Sharekhan to load the 15-minute chart');
-    value = await niftyIndexCandles(fetchImpl);
+  try{
+    const rows=await angel.candles({exchange:market,scripCode:code,symbol,expiry,strike,optionType},interval);
+    const candles=candlesFrom(rows);
+    if(!candles.length)throw Error('Angel returned no valid candles');
+    value={exchange:market,scripCode:code,interval,source:'angel',candles,last:candles.at(-1)};
+  }catch(error){
+    cache.set(cacheKey,{at:Date.now(),until:Date.now()+(error.retryMs||8000),error:error.message,value:previous});
+    throw error;
   }
   cache.set(cacheKey, {at:Date.now(), until:0, error:'', value});
   return value;

@@ -1,6 +1,6 @@
 import {WebSocketServer} from 'ws';
 
-export function attachLive(server, {nextTick, intervalMs = 50, authorize}) {
+export function attachLive(server, {nextTick, intervalMs = 1000, authorize, shouldTick}) {
   const sockets = new Set();
   let latest = null;
   const wss = new WebSocketServer({
@@ -25,18 +25,25 @@ export function attachLive(server, {nextTick, intervalMs = 50, authorize}) {
     socket.on('close', () => sockets.delete(socket));
   });
   let busy = false;
+  let signature = '';
   const run = async () => {
     if (busy) return;
+    if (!sockets.size && shouldTick && !shouldTick()) return;
     busy = true;
     const started = Date.now();
     try {
       const tick = await nextTick();
       if (tick) {
+        const nextSignature = `${tick.error || ''}|${tick.nifty ?? ''}|${tick.price ?? ''}|${(tick.orders || []).map(order => `${order.level}:${order.status}`).join(',')}`;
         latest = {type:'tick', at:started, took:Date.now() - started, ...tick};
-        send(latest);
+        if (nextSignature !== signature) {
+          signature = nextSignature;
+          send(latest);
+        }
       }
     } catch (error) {
       latest = {type:'tick', at:started, took:Date.now() - started, error:error.message};
+      signature = '';
       send(latest);
     } finally {
       busy = false;

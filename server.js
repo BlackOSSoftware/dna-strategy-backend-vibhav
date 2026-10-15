@@ -5,11 +5,11 @@ import {fileURLToPath} from 'node:url';
 import {Strategy, defaults, sessionSignal} from './engine.js';
 import {SharekhanAuth} from './sharekhan-auth.js';
 import {StrategyStore} from './store.js';
-import {assertInstrument,instrumentMeta,niftyOptionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
+import {assertInstrument,instrumentMeta,optionMarket,optionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
 import {marketCandles} from './market.js';
-import {detectOption,optionPremium,optionSide,optionUnderlying,premiumAt,withOptionGrid} from './options.js';
+import {detectOption,optionSide,optionUnderlying,premiumAt,selectUnderlying,withOptionGrid} from './options.js';
 import {attachLive} from './live.js';
-import {createSharekhanFeed} from './sharekhan-feed.js';
+import {AngelData} from './angel.js';
 import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
 import {submitLiveOrder} from './sharekhan-orders.js';
@@ -36,6 +36,7 @@ const broker=new SharekhanAuth({
   vendorKey:process.env.SHAREKHAN_VENDOR_KEY,
   versionId:process.env.SHAREKHAN_VERSION_ID
 });
+const angel=new AngelData();
 const store=new StrategyStore(process.env.MONGODB_URI, process.env.MONGODB_DB||'dna-strategy',process.env.SHAREKHAN_SESSION_ENCRYPTION_KEY);
 const engine=new Strategy();
 function restore(snapshot){
@@ -50,27 +51,25 @@ function restore(snapshot){
   if(engine.status==='running'){engine.status='paused';engine.pending=null;engine.log('risk','Server restarted; manually resume after checking broker positions');}
 }
 async function save(){await store.save(engine.snapshot());}
-async function underlyingSpot(given){
+async function underlyingSpot(given,market={}){
   const price=Number(given);
   if(Number.isFinite(price)&&price>0)return price;
-  const symbol=engine.config.symbol||'NIFTY';
-  const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
-  const close=Number(market.last?.close);
-  if(!(close>0))throw Error(`${optionUnderlying(symbol)} price is not available yet`);
+  const symbol=optionUnderlying(market.symbol||engine.config.symbol||'NIFTY');
+  const exchange=market.exchange||engine.config.exchange||'NC';
+  const scripCode=market.scripCode||engine.config.scripCode;
+  const indices=new Set(['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY','SENSEX']);
+  let quoteTarget={exchange,scripCode,symbol};
+  if(!indices.has(symbol)){
+    const underlying=selectUnderlying(await optionRows(exchange),{symbol,scripCode});
+    if(!underlying)throw Error(`${symbol} price is not available yet`);
+    quoteTarget={exchange:optionMarket(exchange),scripCode:underlying.scripCode,symbol:underlying.tradingSymbol};
+  }
+  const close=Number((await angel.quote(quoteTarget)).price);
+  if(!(close>0))throw Error(`${symbol} price is not available yet`);
   return close;
 }
 async function optionQuote(contract){
-  try{
-    return await optionPremium({expiry:contract.expiry,strike:contract.strike,right:contract.optionType,symbol:contract.tradingSymbol});
-  }catch(nseError){
-    if(!(broker.accessToken()&&contract?.scripCode))throw nseError;
-    try{
-      const market=await marketCandles({exchange:contract.exchange||'NF',scripCode:contract.scripCode,symbol:contract.tradingSymbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
-      const price=Number(market.last?.close);
-      if(price>0)return {price,bid:null,ask:null,underlying:null};
-    }catch{/* History can be rate-limited; the chart retries on its own. */}
-    throw nseError;
-  }
+  return angel.quote(contract);
 }
 function gridSettings(url,direction){
   const cfg=engine.config;
@@ -85,9 +84,10 @@ async function optionBoard(url,maxAge=15000){
   if(url.searchParams.get('strike')&&url.searchParams.get('expiry')){
     const right=optionSide(url.searchParams.get('right')||'CE',direction);
     const strike=Number(url.searchParams.get('strike'));
-    const name=optionUnderlying(url.searchParams.get('symbol')||engine.config.symbol||'NIFTY');
-    contract={tradingSymbol:name,exchange:'NF',scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||0,spot:Number(url.searchParams.get('spot'))||null,label:`${name} ${strike} ${right}`};
-  }else contract=await resolveOption({optionMoneyness:url.searchParams.get('moneyness')||engine.config.optionMoneyness,optionDepth:url.searchParams.get('depth')||engine.config.optionDepth,optionRight:url.searchParams.get('right')||engine.config.optionRight},direction,url.searchParams.get('spot'));
+    const name=optionUnderlying(url.searchParams.get('symbol')||engine.option?.tradingSymbol||engine.config.symbol||'NIFTY');
+    const market=optionMarket(url.searchParams.get('exchange')||engine.option?.exchange||engine.config.exchange||'NF');
+    contract={tradingSymbol:name,exchange:market,scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||0,spot:Number(url.searchParams.get('spot'))||null,label:`${name} ${strike} ${right}`};
+  }else contract=await resolveOption({optionMoneyness:url.searchParams.get('moneyness')||engine.config.optionMoneyness,optionDepth:url.searchParams.get('depth')||engine.config.optionDepth,optionRight:url.searchParams.get('right')||engine.config.optionRight},direction,url.searchParams.get('spot'),{symbol:url.searchParams.get('symbol')||engine.config.symbol,exchange:url.searchParams.get('exchange')||engine.config.exchange,scripCode:url.searchParams.get('scripCode')||engine.config.scripCode});
   const previewOnly=engine.tradeMode==='live'&&!(engine.signal?.spot>0);
   const keepExisting=engine.tradeMode!=='live'&&engine.option?.scripCode&&engine.status!=='idle';
   const liveLocked=engine.orders().some(order=>order.brokerOrderId||order.status==='open'||order.status==='pending');
@@ -123,11 +123,11 @@ async function signalOptionAnchor(contract, direction){
   let signal=null;
   if(engine.tradeMode==='live'&&engine.status==='running')signal=engine.signal?.time?engine.signal:null;
   else{
-    const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol:engine.config.symbol||'NIFTY',apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+    const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol:engine.config.symbol||'NIFTY',angel});
     signal=sessionSignal(market.candles||[],{direction:direction==='short'?'short':'buy',after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd});
   }
   if(!signal?.time)return {error:engine.tradeMode==='live'&&engine.status==='running'?'Signal price waits for the next signal after the strategy starts.':'Signal price waits for today\'s confirmed signal.'};
-  const history=await marketCandles({exchange:contract.exchange||'NF',scripCode:contract.scripCode,symbol:contract.tradingSymbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+  const history=await marketCandles({...contract,angel});
   const price=premiumAt(history.candles,signal.time);
   if(!(price>0))return {error:'The option premium at the signal time is not in the chart yet.'};
   return {price,time:signal.time};
@@ -147,9 +147,18 @@ function applyGridAnchor(board){
   if(locked&&engine.gridKey&&engine.gridKey!==key)board.gridHeld=true;
   if(!engine.gridKey)engine.gridKey=key;
 }
-async function resolveOption(config,direction,spot){
-  const symbol=optionUnderlying(engine.config.symbol||'NIFTY');
-  return detectOption(await niftyOptionRows(),{symbol,spot:await underlyingSpot(spot),moneyness:config.optionMoneyness,depth:config.optionDepth,right:optionSide(config.optionRight,direction)});
+async function resolveOption(config,direction,spot,market={}){
+  const exchange=market.exchange||engine.config.exchange||'NF';
+  const symbol=optionUnderlying(market.symbol||engine.config.symbol||'NIFTY');
+  const rows=await optionRows(exchange);
+  const selection={symbol,exchange:optionMarket(exchange),spot:await underlyingSpot(spot,{...market,symbol,exchange}),moneyness:config.optionMoneyness,depth:config.optionDepth,right:optionSide(config.optionRight,direction)};
+  const contract=detectOption(rows,selection);
+  const depths=selection.moneyness==='ATM'?[1]:[1,2,3,4,5];
+  contract.strikeChoices=depths.flatMap(depth=>{
+    try{const option=detectOption(rows,{...selection,depth});return [{depth,strike:option.strike,label:`${option.strike} ${option.optionType}`}];}
+    catch{return [];}
+  });
+  return contract;
 }
 const allowedOrigins=new Set(['https://strategy-dna.emotionlesstraders.com','http://strategy-dna.emotionlesstraders.com']);
 function allowOrigin(req,res){
@@ -176,12 +185,12 @@ async function brokerBook(){
   bookCache={at:Date.now(),value};
   return value;
 }
-const chartFeed=createSharekhanFeed();
 let liveBusy=false, liveAt=0, signalAt=0;
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
   const tradeMode=data.tradeMode==='live'?'live':'existing';
   if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
+  if(mode==='live'&&!angel.status().connected)throw Error('Connect Angel One before starting live trading');
   const contract=tradeMode==='live'?null:(engine.option?.scripCode?engine.option:await resolveOption(engine.config,data.direction,data.spot));
   return fresh?engine.start(data.direction,mode,contract,tradeMode):engine.arm(data.direction,mode,contract,tradeMode);
 }
@@ -190,7 +199,7 @@ async function refreshLiveSignal(){
   signalAt=Date.now();
   if(engine.orders().some(order=>order.brokerOrderId||order.status==='open'))return;
   try{
-    const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode||'20000',symbol:engine.config.symbol||'NIFTY',apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken()});
+    const market=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode||'20000',symbol:engine.config.symbol||'NIFTY',angel});
     const found=sessionSignal(market.candles||[],{direction:engine.direction||'buy',after:engine.startedAt||Date.now(),strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd});
     if(!found||engine.signal?.time===found.time)return;
     engine.signal=found;
@@ -282,6 +291,7 @@ async function liveOptionOrder(data){
   if(!accessToken||!customerId)throw Error('Connect Sharekhan before placing a live order');
   const contract=engine.option;
   if(!contract?.scripCode)throw Error('Detected option has no scrip code yet');
+  await angel.quote(contract);
   const before=engine.orders().find(item=>item.id===Number(data.id)||item.level===Number(data.level));
   const wasOpen=before?.status==='open';
   const previousStatus=before?.status||'draft';
@@ -331,13 +341,16 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET'&&url.pathname==='/api/state')return reply(res,200,engine.snapshot());
     if(req.method==='GET'&&url.pathname==='/api/instruments/meta')return reply(res,200,instrumentMeta());
     if(req.method==='GET'&&url.pathname==='/api/instruments')return reply(res,200,await searchInstruments(url.searchParams.get('exchange'),url.searchParams.get('q')));
-    if(req.method==='GET'&&url.pathname==='/api/market'){const exchange=url.searchParams.get('exchange')||engine.config.exchange;const scripCode=url.searchParams.get('scripCode')||engine.config.scripCode;return reply(res,200,await marketCandles({exchange,scripCode,symbol:url.searchParams.get('symbol')||engine.config.symbol,apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),liveCandles:chartFeed.candlesFor(exchange,scripCode)}));}
+    if(req.method==='GET'&&url.pathname==='/api/market'){const exchange=url.searchParams.get('exchange')||engine.config.exchange;const scripCode=url.searchParams.get('scripCode')||engine.config.scripCode;const interval=url.searchParams.get('interval')||'15minute';const contract=String(engine.option?.scripCode)===String(scripCode)?engine.option:{};return reply(res,200,await marketCandles({...contract,exchange,scripCode,interval,symbol:url.searchParams.get('symbol')||contract.tradingSymbol||engine.config.symbol,angel}));}
     if(req.method==='GET'&&url.pathname==='/api/option')return reply(res,200,await optionBoard(url));
+    if(req.method==='GET'&&url.pathname==='/api/angel/status')return reply(res,200,angel.status());
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/status')return reply(res,200,await verifyBroker());
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/book')return reply(res,200,await brokerBook());
     if(req.method==='POST'&&url.pathname.startsWith('/api/')){
       const data=await body(req); let result;
       switch(url.pathname){
+        case '/api/angel/login':result=await angel.login();break;
+        case '/api/angel/logout':result=angel.logout();break;
         case '/api/sharekhan/start':result=broker.start();break;
         case '/api/sharekhan/complete':
           result=await broker.complete(data);
@@ -360,7 +373,7 @@ const server=http.createServer(async(req,res)=>{
         case '/api/tick':result=engine.tick(data.price);break;
         default:return reply(res,404,{error:'Unknown action'});
       }
-      if(!url.pathname.startsWith('/api/sharekhan/'))await save();
+      if(!url.pathname.startsWith('/api/sharekhan/')&&!url.pathname.startsWith('/api/angel/'))await save();
       return reply(res,200,result);
     }
     reply(res,404,{error:'Not found'});
@@ -398,21 +411,23 @@ async function start(){
   server.listen(port,host,()=>{
     console.log(`Grid API: http://${host}:${port} · MongoDB ${store.dbName}`);
     warmInstrumentCache();
-    attachLive(server,{intervalMs:50,authorize:token=>!!verifyToken(token),nextTick:async()=>{
+    let boardCache=null,boardAt=0;
+    attachLive(server,{intervalMs:1000,authorize:token=>!!verifyToken(token),shouldTick:()=>engine.mode==='live'&&engine.status==='running',nextTick:async()=>{
       const url=new URL('http://127.0.0.1/api/option');
       url.searchParams.set('direction',engine.direction||'buy');
       url.searchParams.set('moneyness',engine.config.optionMoneyness||'ATM');
       url.searchParams.set('depth',String(engine.config.optionDepth||1));
       url.searchParams.set('right',engine.config.optionRight||'AUTO');
-      await refreshLiveSignal();
       if(engine.tradeMode==='live'&&engine.signal?.spot>0)url.searchParams.set('spot',String(engine.signal.spot));
-      else if(engine.tradeMode!=='live'&&engine.option?.strike&&engine.option?.expiry){url.searchParams.set('strike',engine.option.strike);url.searchParams.set('expiry',engine.option.expiry);url.searchParams.set('right',engine.option.optionType);url.searchParams.set('scrip',engine.option.scripCode||'');}
-      const board=await optionBoard(url,2000);
-      const liveSymbols=[{exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode}];
-      if(engine.option?.scripCode)liveSymbols.push({exchange:engine.option.exchange||'NF',scripCode:engine.option.scripCode});
-      const liveQuotes=chartFeed.quotes(liveSymbols, process.env.SHAREKHAN_API_KEY, broker.accessToken());
-      const chartLtp=liveQuotes.get(`${String(engine.config.exchange||'NC').toUpperCase()}${String(engine.config.scripCode||'').trim()}`)||null;
-      const optionLtp=engine.option?.scripCode?liveQuotes.get(`${String(engine.option.exchange||'NF').toUpperCase()}${String(engine.option.scripCode).trim()}`)||null:null;
+      else if(engine.tradeMode!=='live'&&engine.option?.strike&&engine.option?.expiry){url.searchParams.set('strike',engine.option.strike);url.searchParams.set('expiry',engine.option.expiry);url.searchParams.set('right',engine.option.optionType);url.searchParams.set('scrip',engine.option.scripCode||'');url.searchParams.set('symbol',engine.option.tradingSymbol||engine.config.symbol||'');url.searchParams.set('exchange',engine.option.exchange||engine.config.exchange||'');}
+      const chartLtp=engine.config.scripCode?(await angel.quote({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol:engine.config.symbol||'NIFTY'})).price:null;
+      const optionLtp=engine.option?.scripCode?(await angel.quote(engine.option)).price:null;
+      if(!boardCache||Date.now()-boardAt>10000||!optionLtp){
+        await refreshLiveSignal();
+        boardCache=await optionBoard(url,10000);
+        boardAt=Date.now();
+      }
+      const board=boardCache;
       const price=optionLtp||board.price;
       if(engine.mode==='live')await executeLiveGrid({...board,price});
       if(!price && !chartLtp)return {error:board?.gridError||'Waiting for the option price'};
