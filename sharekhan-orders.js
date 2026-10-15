@@ -19,6 +19,22 @@ export function optionInstrumentType(contract) {
   return indexUnderlyings.has(symbol) ? 'OI' : 'OS';
 }
 
+export function alignOrderContract(contract, rows) {
+  const match = (rows || []).find(row => String(row.scripCode) === String(contract?.scripCode || ''));
+  if (!match) return {...contract, instrumentType: optionInstrumentType(contract)};
+  const listedRight = match.optionType === 'CE' || match.optionType === 'PE' ? match.optionType : '';
+  return {
+    ...contract,
+    tradingSymbol: match.tradingSymbol || contract?.tradingSymbol,
+    scripCode: String(match.scripCode),
+    expiry: match.expiry || contract?.expiry,
+    strike: Number(match.strike) > 0 ? Number(match.strike) : contract?.strike,
+    optionType: listedRight || contract?.optionType,
+    instrumentType: String(match.instType || '').toUpperCase() || optionInstrumentType(contract),
+    lotSize: Number(match.lotSize) > 0 ? Number(match.lotSize) : contract?.lotSize
+  };
+}
+
 export function buildOptionOrder({customerId, loginId, contract, order, productType, requestType = 'NEW', orderId = ''}) {
   const lot = Number(contract?.lotSize);
   const lots = Number(order?.quantity);

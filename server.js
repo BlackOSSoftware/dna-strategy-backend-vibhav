@@ -12,7 +12,7 @@ import {attachLive} from './live.js';
 import {AngelData} from './angel.js';
 import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
-import {submitLiveOrder} from './sharekhan-orders.js';
+import {alignOrderContract, submitLiveOrder} from './sharekhan-orders.js';
 import {applyBrokerFills, liveIntents, trailOpenStops} from './live-grid.js';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -256,6 +256,16 @@ function contractFor(order){
   const right=String(order?.right||'').toUpperCase();
   return (right&&engine.sideContracts?.[right])||engine.option;
 }
+async function liveContract(contract){
+  if(!contract?.scripCode)return contract;
+  try{
+    const rows=await optionRows(contract.exchange||engine.config.exchange||'NF');
+    return alignOrderContract(contract, rows);
+  }catch{return contract;}
+}
+async function sendLive(contract, order){
+  return submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:await liveContract(contract),order,productType:engine.config.productType});
+}
 function seedLiveGrid(board){
   const sides=board?.sides?.length?board.sides:[board];
   for(const side of sides){
@@ -297,12 +307,12 @@ async function executeLiveGrid(board){
         try{
           if(intent.type==='entry'){
             engine.optionOrder({action:'place', level:order.level, right, live:true});
-            const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract,order,productType:engine.config.productType});
+            const sent=await sendLive(contract, order);
             order.brokerOrderId=sent.orderId;
             engine.log('order',`Live entry ${right} level ${order.level} at ${order.entry} · ${sent.orderId}`);
           }else{
             const exitOrder={side:order.side==='short'?'buy':'short', entry:intent.price, quantity:order.quantity};
-            const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract,order:exitOrder,productType:engine.config.productType});
+            const sent=await sendLive(contract, exitOrder);
             order.exitBrokerOrderId=sent.orderId;
             order.exitReason=intent.reason;
             engine.log('order',`Live ${intent.reason} ${right} level ${order.level} at ${intent.price} · ${sent.orderId}`);
@@ -322,11 +332,11 @@ async function squareLivePositions(){
   for(const order of [...engine.orders()]){
     try{
       if(order.status==='pending'&&order.brokerOrderId&&!order.exitBrokerOrderId){
-        await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:contractFor(order),order,productType:engine.config.productType});
+        await sendLive(contractFor(order), order);
         order.brokerOrderId='';
       }else if(order.status==='open'&&!order.exitBrokerOrderId&&engine.optionPrice>0){
         const exitOrder={side:order.side==='short'?'buy':'short', entry:engine.optionPrice, quantity:order.quantity};
-        const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:contractFor(order),order:exitOrder,productType:engine.config.productType});
+        const sent=await sendLive(contractFor(order), exitOrder);
         order.exitBrokerOrderId=sent.orderId;
       }
     }catch(error){engine.log('risk',`Kill could not close level ${order.level}: ${error.message}`);}
@@ -337,7 +347,7 @@ async function liveOptionOrder(data){
     const right=String(data.right||'').toUpperCase();
     const existing=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&(!right||(item.right||'CE')===right));
     if(existing?.brokerOrderId){
-      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:contractFor(existing),order:existing,productType:engine.config.productType});
+      await sendLive(contractFor(existing), existing);
       existing.brokerOrderId='';
       existing.routing='paper';
     }
@@ -360,7 +370,7 @@ async function liveOptionOrder(data){
   engine.optionOrder({...data,live:true});
   const order=engine.orders().find(item=>item.level===Number(data.level)&&scoped(item))||engine.orders().find(item=>item.id===Number(data.id)&&scoped(item));
   try{
-    const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId,loginId,contract,order,productType:engine.config.productType});
+    const sent=await sendLive(contract, order);
     order.brokerOrderId=sent.orderId;
     order.brokerQty=sent.quantity;
     engine.log('order',`Sharekhan order ${sent.orderId} · level ${order.level} · qty ${sent.quantity}`);
