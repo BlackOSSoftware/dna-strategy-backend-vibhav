@@ -1,6 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt, selectUnderlying} from './options.js';
+import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt, selectUnderlying, sideActions} from './options.js';
+test('both mode runs a buy grid on the call and a sell grid on the put for a buy signal', () => {
+  assert.deepEqual(sideActions({optionMode:'BOTH', callOnBuy:'buy', callOnSell:'sell', putOnBuy:'sell', putOnSell:'buy'}, 'buy'), [
+    {right:'CE', action:'buy', side:'buy'},
+    {right:'PE', action:'sell', side:'short'}
+  ]);
+  assert.deepEqual(sideActions({optionMode:'CE', callOnBuy:'buy', putOnBuy:'sell'}, 'buy').map(item => item.right), ['CE']);
+  assert.deepEqual(sideActions({optionMode:'BOTH', callOnBuy:'off', putOnBuy:'off'}, 'buy'), []);
+  assert.equal(sideActions({optionRight:'AUTO'}, 'buy'), null);
+});
 
 const asOf = new Date('2026-10-05T08:30:00+05:30');
 const rows = [];

@@ -7,7 +7,7 @@ import {SharekhanAuth} from './sharekhan-auth.js';
 import {StrategyStore} from './store.js';
 import {assertInstrument,instrumentMeta,optionMarket,optionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
 import {marketCandles} from './market.js';
-import {detectOption,optionSide,optionUnderlying,premiumAt,selectUnderlying,withOptionGrid} from './options.js';
+import {detectOption,optionSide,optionUnderlying,premiumAt,selectUnderlying,sideActions,withOptionGrid} from './options.js';
 import {attachLive} from './live.js';
 import {AngelData} from './angel.js';
 import {login, tokenFrom, verifyToken} from './auth.js';
@@ -76,10 +76,48 @@ function gridSettings(url,direction){
   const num=(name,fallback)=>{const value=Number(url.searchParams.get(name));return Number.isFinite(value)&&value>0?value:fallback;};
   return {side:direction==='short'?'short':'buy',gridStep:num('gridStep',cfg.gridStep),targetPoints:num('targetPoints',cfg.targetPoints),initialStop:num('initialStop',cfg.initialStop),maxLegs:Math.trunc(num('maxLegs',cfg.maxLegs)),tickSize:num('tickSize',cfg.tickSize||0.05),trailStartLeg:Math.trunc(num('trailStartLeg',cfg.trailStartLeg)),trailStep:num('trailStep',cfg.trailStep)};
 }
+async function boardForPlan(url,direction,settings,plan){
+  const market={symbol:url.searchParams.get('symbol')||engine.config.symbol,exchange:url.searchParams.get('exchange')||engine.config.exchange,scripCode:url.searchParams.get('scripCode')||engine.config.scripCode};
+  const gridSource=(url.searchParams.get('gridSource')||engine.config.gridSource)==='signal'?'signal':'premium';
+  if(engine.config.gridSource!==gridSource){engine.config.gridSource=gridSource;await save();}
+  settings.gridSource=gridSource;
+  const selection={optionMoneyness:url.searchParams.get('moneyness')||engine.config.optionMoneyness,optionDepth:url.searchParams.get('depth')||engine.config.optionDepth};
+  const sides=[];
+  for(const item of plan){
+    let contract;
+    try{contract=await resolveOption({...selection,optionRight:item.right},direction,url.searchParams.get('spot'),market);}
+    catch(error){sides.push({optionType:item.right,side:item.side,label:'',grid:[],gridError:error.message,orders:[],gridSource});continue;}
+    const sideSettings={...settings,side:item.side};
+    if(Number(contract.tickSize)>0)sideSettings.tickSize=Number(contract.tickSize);
+    let quote=null;
+    try{quote=await optionQuote(contract);}catch(error){quote={error};}
+    let board;
+    try{
+      if(quote?.error)throw quote.error;
+      board=await withOptionGrid(contract,{...sideSettings,quote});
+    }catch(error){board={...contract,side:item.side,price:quote?.price||null,anchor:null,gridSource,signalTime:null,grid:[],gridError:error.message};}
+    board.side=item.side;
+    if(board.grid?.length)applyGridAnchor(board);
+    board.orders=engine.orders().filter(order=>(order.right||'CE')===item.right);
+    sides.push(board);
+  }
+  engine.sideContracts={};
+  for(const side of sides)if(side.scripCode)engine.sideContracts[side.optionType]=side;
+  if(sides[0]?.scripCode)engine.option=sides[0];
+  const first=sides[0]||{label:'',side:direction==='short'?'short':'buy',price:null,grid:[],orders:[],gridError:'This signal has no active side.',gridSource};
+  return {...first,sides};
+}
 async function optionBoard(url,maxAge=15000){
   const direction=url.searchParams.get('direction')||engine.direction||'buy';
   const settings=gridSettings(url,direction);
   settings.maxAge=maxAge;
+  const previewConfig={...engine.config};
+  for(const key of ['optionMode','callOnBuy','callOnSell','putOnBuy','putOnSell']){
+    const value=url.searchParams.get(key);
+    if(value)previewConfig[key]=value;
+  }
+  const plan=sideActions(previewConfig,direction);
+  if(Array.isArray(plan))return boardForPlan(url,direction,settings,plan);
   let contract;
   if(url.searchParams.get('strike')&&url.searchParams.get('expiry')){
     const right=optionSide(url.searchParams.get('right')||'CE',direction);
@@ -134,18 +172,23 @@ async function signalOptionAnchor(contract, direction){
 }
 function applyGridAnchor(board){
   const source=board.gridSource==='signal'?'signal':'premium';
+  const slot=board.optionType||'CE';
   const key=source==='signal'?`signal:${board.scripCode||''}:${board.anchor||''}`:`premium:${board.scripCode||''}`;
-  const locked=engine.orders().some(order=>order.brokerOrderId||order.exitBrokerOrderId||order.status==='open'||order.status==='pending'||order.status==='rejected');
+  const slotOrders=()=>engine.orders().filter(order=>(order.right||'CE')===slot);
+  const locked=slotOrders().some(order=>order.brokerOrderId||order.exitBrokerOrderId||order.status==='open'||order.status==='pending'||order.status==='rejected');
   if(!board.grid?.length)return;
   const install=()=>{
     const side=board.side==='short'?'short':'buy';
-    engine.optionOrders=board.grid.map(row=>engine.draftOrder({...row,side,quantity:engine.config.quantity}));
-    engine.gridKey=key;
+    const kept=engine.orders().filter(order=>(order.right||'CE')!==slot);
+    const next=board.grid.map(row=>engine.draftOrder({...row,side,quantity:engine.config.quantity,right:slot}));
+    engine.optionOrders=[...kept,...next];
+    engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
   };
-  if(source==='signal'&&!engine.orders().length)return install();
-  if(!locked&&engine.gridKey&&engine.gridKey!==key)return install();
-  if(locked&&engine.gridKey&&engine.gridKey!==key)board.gridHeld=true;
-  if(!engine.gridKey)engine.gridKey=key;
+  const previous=engine.gridKeys?.[slot]||'';
+  if(source==='signal'&&!slotOrders().length)return install();
+  if(!locked&&previous&&previous!==key)return install();
+  if(locked&&previous&&previous!==key)board.gridHeld=true;
+  if(!previous)engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
 }
 async function resolveOption(config,direction,spot,market={}){
   const exchange=market.exchange||engine.config.exchange||'NF';
@@ -209,51 +252,66 @@ async function refreshLiveSignal(){
     await save();
   }catch(error){engine.log('risk',`Live signal check failed: ${error.message}`);}
 }
+function contractFor(order){
+  const right=String(order?.right||'').toUpperCase();
+  return (right&&engine.sideContracts?.[right])||engine.option;
+}
 function seedLiveGrid(board){
-  if(engine.orders().length||!board?.grid?.length)return;
-  const side=board.side==='short'?'short':'buy';
-  const rows=board.grid.filter(row=>row.entry>0&&row.target>0&&row.stop>0);
-  if(!rows.length){engine.log('risk','Live grid was not armed because a level price is not tradable');return;}
-  engine.optionOrders=rows.map(row=>engine.draftOrder({...row, side, quantity:engine.config.quantity}));
+  const sides=board?.sides?.length?board.sides:[board];
+  for(const side of sides){
+    const right=side?.optionType||'CE';
+    if(engine.orders().some(order=>(order.right||'CE')===right)||!side?.grid?.length)continue;
+    const rows=side.grid.filter(row=>row.entry>0&&row.target>0&&row.stop>0);
+    if(!rows.length)continue;
+    const made=rows.map(row=>engine.draftOrder({...row,side:side.side==='short'?'short':'buy',quantity:engine.config.quantity,right}));
+    engine.optionOrders=[...engine.orders(),...made];
+  }
 }
 async function executeLiveGrid(board){
   if(engine.mode!=='live'||engine.status!=='running'||!engine.inSession()||liveBusy||Date.now()-liveAt<1000)return;
   if(engine.tradeMode==='live'&&!(engine.signal?.spot>0))return;
-  if(!broker.accessToken()||!engine.option?.scripCode||!(board?.price>0))return;
+  if(!broker.accessToken())return;
+  const sides=board?.sides?.length?board.sides:[board];
+  if(!sides.some(side=>side?.price>0))return;
   liveBusy=true; liveAt=Date.now();
   try{
     seedLiveGrid(board);
-    const orders=engine.orders();
-    const side=orders[0]?.side||board.side||'buy';
-    trailOpenStops(orders, board.price, {side, trailStartLeg:engine.config.trailStartLeg, trailStep:engine.config.trailStep, tick:engine.config.tickSize});
     const book=await brokerBook();
-    applyBrokerFills(orders, book.orders||[], (order, price, reason)=>engine.closeOptionOrder(order, price, reason));
-    for(const order of orders){
+    applyBrokerFills(engine.orders(), book.orders||[], (order, price, reason)=>engine.closeOptionOrder(order, price, reason));
+    for(const order of engine.orders()){
       if(order.status==='rejected'&&order.rejectReason&&!order.rejectLogged){
         order.rejectLogged=true;
         engine.log('risk',`Sharekhan rejected level ${order.level}: ${order.rejectReason}`);
       }
     }
-    for(const intent of liveIntents(orders, board.price, side)){
-      const order=orders.find(item=>item.level===intent.level);
-      if(!order)continue;
-      try{
-        if(intent.type==='entry'){
-          engine.optionOrder({action:'place', level:order.level, live:true});
-          const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:engine.option,order,productType:engine.config.productType});
-          order.brokerOrderId=sent.orderId;
-          engine.log('order',`Live entry level ${order.level} at ${order.entry} · ${sent.orderId}`);
-        }else{
-          const exitOrder={side:order.side==='short'?'buy':'short', entry:intent.price, quantity:order.quantity};
-          const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:engine.option,order:exitOrder,productType:engine.config.productType});
-          order.exitBrokerOrderId=sent.orderId;
-          order.exitReason=intent.reason;
-          engine.log('order',`Live ${intent.reason} level ${order.level} at ${intent.price} · ${sent.orderId}`);
+    for(const side of sides){
+      if(!(side?.price>0))continue;
+      const right=side.optionType||'CE';
+      const orders=engine.orders().filter(order=>(order.right||'CE')===right);
+      const sideName=orders[0]?.side||side.side||'buy';
+      const contract=engine.sideContracts?.[right]||side;
+      trailOpenStops(orders, side.price, {side:sideName, trailStartLeg:engine.config.trailStartLeg, trailStep:engine.config.trailStep, tick:engine.config.tickSize});
+      for(const intent of liveIntents(orders, side.price, sideName)){
+        const order=orders.find(item=>item.level===intent.level);
+        if(!order)continue;
+        try{
+          if(intent.type==='entry'){
+            engine.optionOrder({action:'place', level:order.level, right, live:true});
+            const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract,order,productType:engine.config.productType});
+            order.brokerOrderId=sent.orderId;
+            engine.log('order',`Live entry ${right} level ${order.level} at ${order.entry} · ${sent.orderId}`);
+          }else{
+            const exitOrder={side:order.side==='short'?'buy':'short', entry:intent.price, quantity:order.quantity};
+            const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract,order:exitOrder,productType:engine.config.productType});
+            order.exitBrokerOrderId=sent.orderId;
+            order.exitReason=intent.reason;
+            engine.log('order',`Live ${intent.reason} ${right} level ${order.level} at ${intent.price} · ${sent.orderId}`);
+          }
+        }catch(error){
+          if(intent.type==='entry'&&order.status==='pending'&&!order.brokerOrderId)order.status='draft';
+          order.liveHoldUntil=Date.now()+15000;
+          engine.log('risk',`Live level ${order.level} was not sent: ${error.message}`);
         }
-      }catch(error){
-        if(intent.type==='entry'&&order.status==='pending'&&!order.brokerOrderId)order.status='draft';
-        order.liveHoldUntil=Date.now()+15000;
-        engine.log('risk',`Live level ${order.level} was not sent: ${error.message}`);
       }
     }
     await save();
@@ -264,11 +322,11 @@ async function squareLivePositions(){
   for(const order of [...engine.orders()]){
     try{
       if(order.status==='pending'&&order.brokerOrderId&&!order.exitBrokerOrderId){
-        await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:engine.option,order,productType:engine.config.productType});
+        await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:contractFor(order),order,productType:engine.config.productType});
         order.brokerOrderId='';
       }else if(order.status==='open'&&!order.exitBrokerOrderId&&engine.optionPrice>0){
         const exitOrder={side:order.side==='short'?'buy':'short', entry:engine.optionPrice, quantity:order.quantity};
-        const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:engine.option,order:exitOrder,productType:engine.config.productType});
+        const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:contractFor(order),order:exitOrder,productType:engine.config.productType});
         order.exitBrokerOrderId=sent.orderId;
       }
     }catch(error){engine.log('risk',`Kill could not close level ${order.level}: ${error.message}`);}
@@ -276,9 +334,10 @@ async function squareLivePositions(){
 }
 async function liveOptionOrder(data){
   if(data.action==='unplace'){
-    const existing=engine.orders().find(item=>item.id===Number(data.id)||item.level===Number(data.level));
+    const right=String(data.right||'').toUpperCase();
+    const existing=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&(!right||(item.right||'CE')===right));
     if(existing?.brokerOrderId){
-      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:engine.option,order:existing,productType:engine.config.productType});
+      await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:contractFor(existing),order:existing,productType:engine.config.productType});
       existing.brokerOrderId='';
       existing.routing='paper';
     }
@@ -289,15 +348,17 @@ async function liveOptionOrder(data){
   const customerId=broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID;
   const loginId=sharekhanLoginId();
   if(!accessToken||!customerId)throw Error('Connect Sharekhan before placing a live order');
-  const contract=engine.option;
+  const right=String(data.right||'').toUpperCase();
+  const contract=engine.sideContracts?.[right]||engine.option;
   if(!contract?.scripCode)throw Error('Detected option has no scrip code yet');
   await angel.quote(contract);
-  const before=engine.orders().find(item=>item.id===Number(data.id)||item.level===Number(data.level));
+  const scoped=item=>(!right||(item.right||'CE')===right);
+  const before=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&scoped(item));
   const wasOpen=before?.status==='open';
   const previousStatus=before?.status||'draft';
   const previousFilled=before?.filled??null;
   engine.optionOrder({...data,live:true});
-  const order=engine.orders().find(item=>item.level===Number(data.level))||engine.orders().find(item=>item.id===Number(data.id));
+  const order=engine.orders().find(item=>item.level===Number(data.level)&&scoped(item))||engine.orders().find(item=>item.id===Number(data.id)&&scoped(item));
   try{
     const sent=await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId,loginId,contract,order,productType:engine.config.productType});
     order.brokerOrderId=sent.orderId;

@@ -4,7 +4,8 @@ export const defaults = Object.freeze({
   initialStop: 20, trailStartLeg: 3, trailStep: 8,
   maxLoss: 5000, maxProfit: 20000, tickSize: 0.05,
   strategyStart: '09:15', strategyEnd: '15:15',
-  optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO',
+  optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO', optionMode: 'BOTH',
+  callOnBuy: 'buy', callOnSell: 'sell', putOnBuy: 'sell', putOnSell: 'buy',
   gridSource: 'premium'
 });
 const clockValue = value => {
@@ -59,7 +60,7 @@ export class Strategy {
     this.events = []; this.realized = 0; this.lastPrice = null; this.level = 0;
     this.highWater = null; this.lowWater = null; this.sharedStop = null;
     this.haltReason = null; this.nextId = 1; this.firstEntry = null; this.trailAnchor = null; this.option = null;
-    this.optionOrders = []; this.optionPrice = null;
+    this.optionOrders = []; this.optionPrice = null; this.sideContracts = {}; this.gridKeys = {};
   }
   log(type, message, data = {}) { this.events.unshift({id:this.nextId++, time:new Date().toISOString(), type, message, ...data}); this.events.length = Math.min(this.events.length, 200); }
   configure(input) {
@@ -83,6 +84,14 @@ export class Strategy {
     if (!['AUTO', 'CE', 'PE'].includes(right)) throw Error('Choose Auto, CE, or PE');
     if (!Number.isInteger(depth) || depth < 1 || depth > 10) throw Error('Strikes away must be from 1 to 10');
     next.optionMoneyness = moneyness; next.optionRight = right; next.optionDepth = depth;
+    const mode = String(next.optionMode || 'BOTH').toUpperCase();
+    if (!['CE', 'PE', 'BOTH'].includes(mode)) throw Error('Choose Call, Put, or Both');
+    next.optionMode = mode;
+    for (const key of ['callOnBuy', 'callOnSell', 'putOnBuy', 'putOnSell']) {
+      const action = String(next[key] || 'off').toLowerCase();
+      if (!['buy', 'sell', 'off'].includes(action)) throw Error('Each signal action must be a buy grid, sell grid, or off');
+      next[key] = action;
+    }
     next.gridSource = next.gridSource === 'signal' ? 'signal' : 'premium';
     next.symbol = String(next.symbol || '').trim().toUpperCase();
     if (!next.symbol) throw Error('Symbol is required');
@@ -253,21 +262,24 @@ export class Strategy {
   optionOrder(input = {}) {
     const action = String(input.action || '');
     const rows = Array.isArray(input.rows) ? input.rows : [];
-    if (!this.orders().length) {
+    const right = String(input.right || '').toUpperCase();
+    const scoped = order => !right || (order.right || 'CE') === right;
+    if (!this.orders().some(scoped)) {
       if (!rows.length && action !== 'add') throw Error('Load the option grid before changing orders');
-      this.optionOrders = rows.map(row => this.draftOrder(row));
+      const seeded = rows.filter(row => !right || String(row.right || right).toUpperCase() === right).map(row => this.draftOrder({...row, right: row.right || right}));
+      this.optionOrders = [...this.orders(), ...seeded];
     }
     if (action === 'add') {
       const last = this.optionOrders.at(-1);
       const side = input.side === 'short' || last?.side === 'short' ? 'short' : 'buy';
       const sign = side === 'short' ? -1 : 1;
       const entry = last ? last.entry + sign * this.config.gridStep : Number(input.entry);
-      this.optionOrders.push(this.draftOrder({side, entry, target:entry + sign * this.config.targetPoints, stop:entry - sign * this.config.initialStop, quantity:this.config.quantity}));
+      this.optionOrders.push(this.draftOrder({side, right, entry, target:entry + sign * this.config.targetPoints, stop:entry - sign * this.config.initialStop, quantity:this.config.quantity}));
       this.numberOrders();
       this.log('order', `Added level ${this.optionOrders.length}`);
       return this.snapshot();
     }
-    const order = this.orders().find(item => item.id === Number(input.id)) || this.orders().find(item => item.level === Number(input.level));
+    const order = this.orders().find(item => item.id === Number(input.id) && scoped(item)) || this.orders().find(item => item.level === Number(input.level) && scoped(item));
     if (!order) throw Error('Choose an order from the grid');
     if (action === 'edit') {
       if (order.status === 'open') throw Error('An open order cannot be edited');
@@ -293,7 +305,7 @@ export class Strategy {
     return this.snapshot();
   }
   draftOrder(row) {
-    const order = {id:this.nextId++, level:Number(row.level) || 0, side:row.side === 'short' ? 'short' : 'buy', entry:0, target:0, stop:0, quantity:this.config.quantity, status:'draft'};
+    const order = {id:this.nextId++, level:Number(row.level) || 0, side:row.side === 'short' ? 'short' : 'buy', right:String(row.right || '').toUpperCase(), entry:0, target:0, stop:0, quantity:this.config.quantity, status:'draft'};
     this.applyOrder(order, row);
     return order;
   }
@@ -312,7 +324,14 @@ export class Strategy {
     }
     if (input.side === 'buy' || input.side === 'short') order.side = input.side;
   }
-  numberOrders() { this.optionOrders.forEach((order, index) => { order.level = index + 1; }); }
+  numberOrders() {
+    const groups = new Map();
+    for (const order of this.optionOrders) {
+      const right = order.right || 'CE';
+      groups.set(right, [...(groups.get(right) || []), order]);
+    }
+    for (const list of groups.values()) list.forEach((order, index) => { order.level = index + 1; });
+  }
   markOptionPrice(price) {
     const next = Number(price);
     if (!Number.isFinite(next) || next <= 0) return this.snapshot();

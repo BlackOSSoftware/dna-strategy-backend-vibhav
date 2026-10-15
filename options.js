@@ -7,6 +7,21 @@ function todayKey(date) {
   return new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit'}).format(date);
 }
 
+const signalActions = new Set(['buy', 'sell', 'off']);
+
+export function sideActions(config = {}, signal = 'buy') {
+  const mode = String(config.optionMode || '').toUpperCase();
+  const rights = mode === 'PE' ? ['PE'] : mode === 'BOTH' ? ['CE', 'PE'] : mode === 'CE' ? ['CE'] : null;
+  if (!rights) return null;
+  const which = signal === 'sell' || signal === 'short' ? 'Sell' : 'Buy';
+  return rights.flatMap(right => {
+    const key = `${right === 'CE' ? 'call' : 'put'}On${which}`;
+    const action = String(config[key] || 'off').toLowerCase();
+    if (!signalActions.has(action) || action === 'off') return [];
+    return [{right, action, side: action === 'sell' ? 'short' : 'buy'}];
+  });
+}
+
 export function optionSide(right, direction) {
   const selected = String(right || 'AUTO').toUpperCase();
   if (selected === 'CE' || selected === 'PE') return selected;
