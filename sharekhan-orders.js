@@ -10,6 +10,15 @@ function findOrderId(payload) {
   return '';
 }
 
+const indexUnderlyings = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']);
+
+export function optionInstrumentType(contract) {
+  const given = String(contract?.instrumentType || '').toUpperCase();
+  if (['OI', 'OS', 'FI', 'FS'].includes(given)) return given;
+  const symbol = String(contract?.tradingSymbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return indexUnderlyings.has(symbol) ? 'OI' : 'OS';
+}
+
 export function buildOptionOrder({customerId, loginId, contract, order, productType, requestType = 'NEW', orderId = ''}) {
   const lot = Number(contract?.lotSize);
   const lots = Number(order?.quantity);
@@ -35,7 +44,7 @@ export function buildOptionOrder({customerId, loginId, contract, order, productT
     validity: 'GFD',
     requestType,
     productType: productType || 'INVESTMENT',
-    instrumentType: 'OI',
+    instrumentType: optionInstrumentType(contract),
     strikePrice: String(contract.strike),
     optionType: contract.optionType,
     expiry: contract.expiry

@@ -86,7 +86,7 @@ async function optionBoard(url,maxAge=15000){
     const strike=Number(url.searchParams.get('strike'));
     const name=optionUnderlying(url.searchParams.get('symbol')||engine.option?.tradingSymbol||engine.config.symbol||'NIFTY');
     const market=optionMarket(url.searchParams.get('exchange')||engine.option?.exchange||engine.config.exchange||'NF');
-    contract={tradingSymbol:name,exchange:market,scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||0,spot:Number(url.searchParams.get('spot'))||null,label:`${name} ${strike} ${right}`};
+    contract={tradingSymbol:name,exchange:market,scripCode:url.searchParams.get('scrip')||'',expiry:url.searchParams.get('expiry'),strike,optionType:right,instrumentType:engine.option?.instrumentType||'',moneyness:url.searchParams.get('moneyness')||'',lotSize:Number(url.searchParams.get('lot'))||engine.option?.lotSize||0,spot:Number(url.searchParams.get('spot'))||null,label:`${name} ${strike} ${right}`};
   }else contract=await resolveOption({optionMoneyness:url.searchParams.get('moneyness')||engine.config.optionMoneyness,optionDepth:url.searchParams.get('depth')||engine.config.optionDepth,optionRight:url.searchParams.get('right')||engine.config.optionRight},direction,url.searchParams.get('spot'),{symbol:url.searchParams.get('symbol')||engine.config.symbol,exchange:url.searchParams.get('exchange')||engine.config.exchange,scripCode:url.searchParams.get('scripCode')||engine.config.scripCode});
   const previewOnly=engine.tradeMode==='live'&&!(engine.signal?.spot>0);
   const keepExisting=engine.tradeMode!=='live'&&engine.option?.scripCode&&engine.status!=='idle';

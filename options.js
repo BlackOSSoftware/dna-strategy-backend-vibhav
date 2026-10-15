@@ -64,7 +64,7 @@ export function detectOption(rows, {symbol = 'NIFTY', exchange = 'NF', spot, mon
   const market = String(exchange || 'NF').toUpperCase();
   return {
     tradingSymbol:underlying, exchange:market, scripCode:String(match.scripCode), expiry:match.expiry, strike,
-    optionType:side, moneyness:steps === 0 ? 'ATM' : money, depth:steps, lotSize:Number(match.lotSize) || 0,
+    optionType:side, instrumentType:String(match.instType || '').toUpperCase(), moneyness:steps === 0 ? 'ATM' : money, depth:steps, lotSize:Number(match.lotSize) || 0,
     tickSize:Number(match.tickSize) > 0 ? Number(match.tickSize) : 0.05, spot:price, label:`${underlying} ${strike} ${side}`
   };
 }

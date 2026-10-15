@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildOptionOrder, submitLiveOrder} from './sharekhan-orders.js';
+import {buildOptionOrder, optionInstrumentType, submitLiveOrder} from './sharekhan-orders.js';
 
 const contract = {tradingSymbol:'NIFTY', exchange:'NF', scripCode:'40699', strike:22550, optionType:'CE', expiry:'06/10/2026', lotSize:65};
 const order = {side:'buy', entry:79.95, quantity:1};
@@ -14,6 +14,9 @@ test('live option order uses one lot and does not send without a Sharekhan sessi
   assert.equal(body.requestType, 'NEW');
   assert.equal(body.price, '79.95');
   assert.equal(body.instrumentType, 'OI');
+  assert.equal(optionInstrumentType({tradingSymbol:'CRUDEOIL', exchange:'MX', instrumentType:'OS'}), 'OS');
+  assert.equal(optionInstrumentType({tradingSymbol:'CRUDEOIL', exchange:'MX'}), 'OS');
+  assert.equal(optionInstrumentType({tradingSymbol:'RELIANCE', exchange:'NF'}), 'OS');
   await assert.rejects(() => submitLiveOrder({apiKey:'key', accessToken:'', customerId:'', contract, order, fetchImpl:async () => { throw Error('should not send'); }}), /Connect Sharekhan/);
 });
 
