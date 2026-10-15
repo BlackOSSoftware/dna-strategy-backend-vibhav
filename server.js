@@ -178,11 +178,13 @@ function applyGridAnchor(board){
   const locked=slotOrders().some(order=>order.brokerOrderId||order.exitBrokerOrderId||order.status==='open'||order.status==='pending'||order.status==='rejected');
   if(!board.grid?.length)return;
   const install=()=>{
-    const side=board.side==='short'?'short':'buy';
-    const kept=engine.orders().filter(order=>(order.right||'CE')!==slot);
-    const next=board.grid.map(row=>engine.draftOrder({...row,side,quantity:engine.config.quantity,right:slot}));
-    engine.optionOrders=[...kept,...next];
-    engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
+    try{
+      const side=board.side==='short'?'short':'buy';
+      const kept=engine.orders().filter(order=>(order.right||'CE')!==slot);
+      const next=board.grid.map(row=>engine.draftOrder({...row,side,quantity:engine.config.quantity,right:slot}));
+      engine.optionOrders=[...kept,...next];
+      engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
+    }catch(error){board.gridError=error.message;}
   };
   const previous=engine.gridKeys?.[slot]||'';
   if(source==='signal'&&!slotOrders().length)return install();

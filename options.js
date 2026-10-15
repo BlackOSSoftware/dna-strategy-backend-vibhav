@@ -108,11 +108,13 @@ export function optionGridRows({price, anchor = null, side = 'buy', gridStep, ta
   if (anchor != null && anchor !== '' && !(basis > 0)) throw Error('Signal premium is not available for the grid');
   const sign = side === 'short' ? -1 : 1;
   const anchorPrice = moneyRound(basis > 0 ? basis : premium, tick);
-  return Array.from({length:legs}, (_, index) => {
+  if (!(anchorPrice > 0)) throw Error('Option premium is too small for this target or stop');
+  const rows = [];
+  for (let index = 0; index < legs; index++) {
     const level = index + 1;
     const entry = moneyRound(anchorPrice + sign * step * index, tick);
     const shared = level >= sharedFrom;
-    return {
+    const row = {
       level,
       entry,
       target:moneyRound(entry + sign * target, tick),
@@ -122,7 +124,11 @@ export function optionGridRows({price, anchor = null, side = 'buy', gridStep, ta
       trailText:shared ? `Trail ${trail} pts` : `${stop} pt stop`,
       distance:moneyRound(entry - premium, tick)
     };
-  });
+    if (!(row.entry > 0) || !(row.target > 0) || !(row.stop > 0)) break;
+    rows.push(row);
+  }
+  if (!rows.length) throw Error('Option premium is too small for this target or stop');
+  return rows;
 }
 
 export function premiumAt(candles, signalTime) {

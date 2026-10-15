@@ -80,6 +80,9 @@ test('option premium grid is independent of the Nifty index', () => {
   const short = optionGridRows({price:93.4, side:'short', gridStep:7, targetPoints:12, initialStop:20, maxLegs:2, tickSize:0.05, trailStartLeg:3});
   assert.equal(short[0].target, 81.4);
   assert.equal(short[1].entry, 86.4);
+  const cheap = optionGridRows({price:15, side:'short', gridStep:7, targetPoints:12, initialStop:20, maxLegs:4, tickSize:0.1, trailStartLeg:3});
+  assert.equal(cheap.length, 1);
+  assert.ok(cheap.every(row => row.entry > 0 && row.target > 0 && row.stop > 0));
 });
 
 test('signal premium anchors the grid while distance follows the live premium', () => {
