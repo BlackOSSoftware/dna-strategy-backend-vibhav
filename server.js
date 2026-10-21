@@ -445,7 +445,7 @@ function seedLiveGrid(board){
     if(engine.orders().some(order=>(order.right||'CE')===right&&!order.parked)||!side?.grid?.length)continue;
     const rows=side.grid.filter(row=>row.entry>0&&row.target>0&&row.stop>0);
     if(!rows.length)continue;
-    const made=rows.map(row=>engine.draftOrder({...row,side:side.side==='short'?'short':'buy',quantity:side.orderQuantity||engine.config.quantity,right,scripCode:side.scripCode,strike:side.strike,expiry:side.expiry,tradingSymbol:side.tradingSymbol}));
+    const made=rows.map(row=>engine.draftOrder({...row,side:side.side==='short'?'short':'buy',quantity:side.orderQuantity||engine.config.quantity,right,scripCode:side.scripCode,strike:side.strike,expiry:side.expiry,tradingSymbol:side.tradingSymbol,lotSize:side.lotSize}));
     engine.optionOrders=[...engine.orders(),...made];
   }
 }
@@ -466,6 +466,37 @@ async function executeLiveGrid(board){
         engine.log('risk',`Sharekhan rejected level ${order.level}: ${order.rejectReason}`);
       }
     }
+    const capReason=(()=>{
+      const prices={};
+      for(const side of sides)if(side?.price>0)prices[side.optionType||'CE']=side.price;
+      if(!Object.keys(prices).length&&!(engine.realized!==0))return '';
+      const total=Object.keys(prices).length?engine.optionPnl(prices):engine.realized;
+      const maxLoss=Number(engine.config.maxLoss)||0, maxProfit=Number(engine.config.maxProfit)||0;
+      if(maxLoss>0&&total<=-maxLoss)return 'Maximum loss';
+      if(maxProfit>0&&total>=maxProfit)return 'Maximum profit';
+      return '';
+    })();
+    if(capReason){
+      for(const side of sides){
+        if(!(side?.price>0))continue;
+        const right=side.optionType||'CE';
+        const contract=engine.sideContracts?.[right]||side;
+        for(const order of engine.orders().filter(item=>(item.right||'CE')===right)){
+          try{
+            if(order.status==='pending'&&order.brokerOrderId&&!order.exitBrokerOrderId){await cancelLiveOrder(order);order.brokerOrderId='';}
+            else if(order.status==='open'&&!order.exitBrokerOrderId){
+              const exitOrder={side:order.side==='short'?'buy':'short',entry:side.price,quantity:order.quantity};
+              const sent=await sendLive(contract,exitOrder);
+              order.exitBrokerOrderId=sent.orderId; order.exitReason=capReason;
+            }
+          }catch(error){engine.log('risk',`Daily cap exit for level ${order.level} failed: ${error.message}`);}
+        }
+      }
+      engine.status='killed'; engine.haltReason=capReason; engine.pending=null;
+      engine.log('risk',`${capReason} limit reached on live option trades; positions exit bhej diye gaye hain`);
+      await save();
+      return;
+    }
     for(const side of sides){
       if(!(side?.price>0))continue;
       const right=side.optionType||'CE';
@@ -481,6 +512,7 @@ async function executeLiveGrid(board){
             engine.optionOrder({action:'place', level:order.level, right, live:true});
             const sent=await sendLive(contract, order);
             order.brokerOrderId=sent.orderId;
+            if(Number(contract?.lotSize)>0)order.lotSize=Number(contract.lotSize);
             order.brokerPlacedAt=Date.now();
             rememberBrokerOrder(order, sent);
             engine.log('order',`Live entry ${right} level ${order.level} at ${order.entry} · ${sent.orderId}`);
@@ -546,6 +578,7 @@ async function liveOptionOrder(data){
   try{
     const sent=await sendLive(contract, order);
     order.brokerOrderId=sent.orderId;
+    if(Number(contract?.lotSize)>0)order.lotSize=Number(contract.lotSize);
     order.brokerPlacedAt=Date.now();
     order.brokerQty=sent.quantity;
     rememberBrokerOrder(order, sent);

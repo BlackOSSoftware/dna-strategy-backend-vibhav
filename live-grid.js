@@ -37,8 +37,8 @@ export function liveIntents(orders, price, side = 'buy', now = Date.now()) {
     if (order.status === 'open' && order.brokerOrderId && !order.exitBrokerOrderId) {
       const stopped = buy ? price <= order.stop : price >= order.stop;
       const target = buy ? price >= order.target : price <= order.target;
-      if (stopped) intents.push({type: 'exit', level: order.level, price: order.stop, reason: 'stop'});
-      else if (target) intents.push({type: 'exit', level: order.level, price: order.target, reason: 'target'});
+      if (stopped) intents.push({type: 'exit', level: order.level, price, reason: 'stop'});
+      else if (target) intents.push({type: 'exit', level: order.level, price, reason: 'target'});
     }
   }
   return intents;

@@ -66,6 +66,27 @@ test('a live order stays pending when the premium crosses its entry',()=>{
   assert.equal(s.optionOrders[0].status,'pending');
   assert.equal(s.optionOrders[0].routing,'live');
 });
+test('option pnl is in rupees using the contract lot size',()=>{
+  const s=new Strategy({quantity:2});
+  s.optionOrder({action:'place',level:1,rows:[{level:1,side:'buy',entry:100,target:200,stop:10,quantity:2,lotSize:65}]});
+  s.markOptionPrice(100);
+  assert.equal(s.optionOrders[0].status,'open');
+  s.closeOptionOrder(s.optionOrders[0],110,'Target');
+  assert.equal(s.optionOrders[0].pnl,1300);
+  assert.equal(s.realized,1300);
+});
+test('daily loss cap closes open option trades and kills the run',()=>{
+  const s=new Strategy({quantity:1,maxLoss:500,maxProfit:100000});
+  s.status='running';
+  s.optionOrder({action:'place',level:1,rows:[{level:1,side:'buy',entry:100,target:200,stop:10,quantity:1,lotSize:10}]});
+  s.markOptionPrice(100);
+  assert.equal(s.optionOrders[0].status,'open');
+  s.markOptionPrice(40);
+  assert.equal(s.optionOrders[0].status,'closed');
+  assert.equal(s.realized,-600);
+  assert.equal(s.status,'killed');
+  assert.equal(s.haltReason,'Maximum loss');
+});
 test('entries stay inside the strategy start and end time',()=>{
   const s=new Strategy({strategyStart:'09:20',strategyEnd:'15:10'});
   s.arm('buy');

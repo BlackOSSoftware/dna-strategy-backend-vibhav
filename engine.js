@@ -387,6 +387,7 @@ export class Strategy {
   }
   draftOrder(row) {
     const order = {id:this.nextId++, level:Number(row.level) || 0, side:row.side === 'short' ? 'short' : 'buy', right:String(row.right || '').toUpperCase(), entry:0, target:0, stop:0, quantity:this.config.quantity, status:'draft'};
+    if (Number(row.lotSize) > 0) order.lotSize = Number(row.lotSize);
     if (row.scripCode) order.scripCode = String(row.scripCode);
     if (Number(row.strike) > 0) order.strike = Number(row.strike);
     if (row.expiry) order.expiry = row.expiry;
@@ -432,11 +433,38 @@ export class Strategy {
         if (stopped || target) this.closeOptionOrder(order, next, stopped ? 'Stop' : 'Target');
       }
     }
+    const openPaper = this.orders().some(order => order.status === 'open' && order.routing !== 'live');
+    if (this.status === 'running' || openPaper) {
+      const total = this.optionPnl(next);
+      const maxLoss = Number(this.config.maxLoss) || 0, maxProfit = Number(this.config.maxProfit) || 0;
+      if ((maxLoss > 0 && total <= -maxLoss) || (maxProfit > 0 && total >= maxProfit)) {
+        const reason = maxLoss > 0 && total <= -maxLoss ? 'Maximum loss' : 'Maximum profit';
+        for (const order of this.orders()) if (order.status === 'open' && order.routing !== 'live') this.closeOptionOrder(order, next, reason);
+        if (this.status === 'running') { this.status = 'killed'; this.haltReason = reason; }
+        this.log('risk', `${reason} limit reached on option trades`);
+      }
+    }
     return this.snapshot();
+  }
+  lotOf(order) {
+    const lot = Number(order?.lotSize);
+    if (lot > 0) return lot;
+    const fallback = Number(this.option?.lotSize);
+    return fallback > 0 ? fallback : 1;
+  }
+  optionPnl(priceByRight = {}) {
+    let total = this.realized;
+    for (const order of this.orders()) {
+      if (order.status !== 'open' || !(order.filled > 0)) continue;
+      const price = typeof priceByRight === 'number' ? priceByRight : priceByRight[order.right || 'CE'];
+      if (!(price > 0)) continue;
+      total += (order.side === 'buy' ? price - order.filled : order.filled - price) * order.quantity * this.lotOf(order);
+    }
+    return fmt(total);
   }
   closeOptionOrder(order, price, reason) {
     order.status = 'closed'; order.exit = fmt(price); order.reason = reason;
-    order.pnl = fmt((order.side === 'buy' ? price - order.filled : order.filled - price) * order.quantity);
+    order.pnl = fmt((order.side === 'buy' ? price - order.filled : order.filled - price) * order.quantity * this.lotOf(order));
     this.realized = fmt(this.realized + order.pnl);
     this.log('exit', `Option level ${order.level} ${reason} at ${order.exit}`, {pnl:order.pnl});
   }

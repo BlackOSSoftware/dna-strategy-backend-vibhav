@@ -25,6 +25,7 @@ test('an open live buy exits on the stop or target and trails after the third fi
   trailOpenStops(orders, 124, {trailStartLeg:3, trailStep:8});
   assert.ok(orders[0].stop > 100);
   assert.equal(liveIntents(orders, orders[0].stop).find(item => item.level === 1).reason, 'stop');
+  assert.equal(liveIntents([{...orders[0], stop:80}], 75)[0].price, 75);
   orders[0].stop = 80;
   assert.equal(liveIntents([{...orders[0], stop:80}], 112)[0].reason, 'target');
 });
