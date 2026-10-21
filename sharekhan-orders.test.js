@@ -14,6 +14,9 @@ test('live option order uses one lot and does not send without a Sharekhan sessi
   assert.equal(body.requestType, 'NEW');
   assert.equal(body.price, '79.95');
   assert.equal(body.instrumentType, 'OI');
+  const intraday = buildOptionOrder({customerId:'12345', loginId:'APILOGIN', contract, order, productType:'BIGTRADE'});
+  assert.equal(intraday.productType, 'BIGTRADE');
+  assert.equal(intraday.transactionType, 'B');
   assert.equal(optionInstrumentType({tradingSymbol:'CRUDEOIL', exchange:'MX', instrumentType:'OS'}), 'OS');
   assert.equal(optionInstrumentType({tradingSymbol:'CRUDEOIL', exchange:'MX'}), 'OS');
   assert.equal(optionInstrumentType({tradingSymbol:'RELIANCE', exchange:'NF'}), 'OS');
