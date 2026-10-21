@@ -160,11 +160,13 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
 }
 async function optionBoard(url,maxAge=15000){
   let direction=url.searchParams.get('direction')||engine.direction||'buy';
+  let signalInfo=null;
   if(engine.tradeMode==='live'&&engine.status==='running'&&!(engine.signal?.spot>0)){
     return {label:'Waiting for next signal',side:direction==='short'?'short':'buy',price:null,grid:[],orders:[],gridError:'Upcoming signal has not formed yet. The new trade is placed when it does.',sides:[]};
   }
   if(engine.tradeMode==='live'&&engine.status==='running'&&engine.signal?.spot>0){
     direction=engine.direction||direction;
+    signalInfo={side:engine.signal.side==='short'?'short':'buy',spot:engine.signal.spot,time:engine.signal.time,interval:engine.config.signalInterval||'15minute'};
     url.searchParams.set('spot',String(engine.signal.spot));
     url.searchParams.set('direction',direction);
   }
@@ -181,6 +183,7 @@ async function optionBoard(url,maxAge=15000){
       const signal=sequence.at(-1);
       if(signal?.spot>0){
         direction=signal.side;
+        signalInfo={side:signal.side,spot:signal.spot,time:signal.time,interval:engine.config.signalInterval||'15minute'};
         url.searchParams.set('spot',String(signal.spot));
         url.searchParams.set('direction',direction);
       }
@@ -189,7 +192,7 @@ async function optionBoard(url,maxAge=15000){
   const settings=gridSettings(url,direction);
   settings.maxAge=maxAge;
   const plan=sideActions(previewConfig,direction);
-  if(Array.isArray(plan))return boardForPlan(url,direction,settings,plan,previewConfig);
+  if(Array.isArray(plan)){const planned=await boardForPlan(url,direction,settings,plan,previewConfig);if(signalInfo)planned.signalInfo=signalInfo;return planned;}
   let contract;
   if(url.searchParams.get('strike')&&url.searchParams.get('expiry')){
     const right=optionSide(url.searchParams.get('right')||'CE',direction);
@@ -228,6 +231,7 @@ async function optionBoard(url,maxAge=15000){
   if(board.price)engine.markOptionPrice(board.price);
   if(JSON.stringify(engine.optionOrders||[])!==ordersBefore)await save();
   board.orders=String(engine.option?.scripCode||'')===String(contract?.scripCode||'')?engine.orders():[];
+  if(signalInfo)board.signalInfo=signalInfo;
   return board;
 }
 async function signalOptionAnchor(contract, direction){
