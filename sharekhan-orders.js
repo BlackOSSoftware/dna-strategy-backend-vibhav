@@ -84,8 +84,21 @@ export async function sendSharekhanOrder({apiKey, accessToken, body, fetchImpl =
   return {orderId, quantity: body.quantity, message};
 }
 
+export function cancelOrderBody({customerId, loginId, order}) {
+  const original = order?.brokerOrder;
+  if (!original?.scripCode) return null;
+  return {
+    ...original,
+    customerId: Number(customerId),
+    channelUser: String(loginId || customerId),
+    requestType: 'CANCEL',
+    orderId: String(order.brokerOrderId)
+  };
+}
+
 export async function submitLiveOrder({apiKey, accessToken, customerId, loginId, contract, order, productType, fetchImpl}) {
   if (!accessToken || !customerId) throw Error('Connect Sharekhan before placing a live order');
-  const body = buildOptionOrder({customerId, loginId, contract, order, productType, requestType: order?.brokerOrderId ? 'CANCEL' : 'NEW', orderId: order?.brokerOrderId || ''});
-  return sendSharekhanOrder({apiKey, accessToken, body, fetchImpl});
+  const body = cancelOrderBody({customerId, loginId, order}) || buildOptionOrder({customerId, loginId, contract, order, productType, requestType: order?.brokerOrderId ? 'CANCEL' : 'NEW', orderId: order?.brokerOrderId || ''});
+  const sent = await sendSharekhanOrder({apiKey, accessToken, body, fetchImpl});
+  return {...sent, body};
 }

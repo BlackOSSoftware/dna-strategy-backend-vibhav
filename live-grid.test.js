@@ -8,7 +8,10 @@ test('a higher buy level is not sent until the premium reaches it', () => {
     {level:2, side:'buy', entry:107, target:119, stop:87, status:'draft'}
   ];
   assert.deepEqual(liveIntents(orders, 100).map(item => item.level), [1]);
-  assert.deepEqual(liveIntents(orders, 107).map(item => item.level), [1, 2]);
+  assert.deepEqual(liveIntents(orders, 107).map(item => item.level), [1]);
+  orders[0].status = 'open';
+  orders[0].brokerOrderId = '1';
+  assert.deepEqual(liveIntents(orders, 107).map(item => item.level), [2]);
 });
 
 test('an open live buy exits on the stop or target and trails after the third fill', () => {
@@ -33,6 +36,19 @@ test('an exchange rejection stays rejected and is not sent again', () => {
   assert.equal(orders[0].brokerOrderId, '210003475');
   assert.match(orders[0].rejectReason, /insufficient funds/);
   assert.deepEqual(liveIntents(orders, 80), []);
+});
+
+test('a pending order missing from the broker book is cleared after a grace period', () => {
+  const fresh = [{level:1, side:'buy', entry:100, target:112, stop:80, status:'pending', brokerOrderId:'55', brokerPlacedAt:1000000}];
+  applyBrokerFills(fresh, [{orderId:'99', status:'Open'}], () => {}, {now:1000000 + 60000, trustedBook:true});
+  assert.equal(fresh[0].status, 'pending');
+  const stale = [{level:5, side:'buy', entry:60.2, target:72.2, stop:40.2, status:'pending', brokerOrderId:'55'}];
+  applyBrokerFills(stale, [{orderId:'99', status:'Open'}], () => {}, {now:1000000, trustedBook:true});
+  assert.equal(stale[0].status, 'draft');
+  assert.equal(stale[0].brokerOrderId, '');
+  const untrusted = [{level:1, side:'buy', entry:100, target:112, stop:80, status:'pending', brokerOrderId:'55'}];
+  applyBrokerFills(untrusted, [], () => {}, {now:1000000, trustedBook:false});
+  assert.equal(untrusted[0].status, 'pending');
 });
 
 test('broker fills open the entry and close the exit once', () => {

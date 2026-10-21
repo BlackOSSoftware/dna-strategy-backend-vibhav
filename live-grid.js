@@ -29,7 +29,8 @@ export function liveIntents(orders, price, side = 'buy', now = Date.now()) {
     const buy = (order.side || side) !== 'short';
     const reached = buy ? price >= order.entry : price <= order.entry;
     if (!order.brokerOrderId && (order.status === 'draft' || order.status === 'pending') && reached) {
-      intents.push({type: 'entry', level: order.level, price: order.entry});
+      const lowerOpen = orders.filter(item => item.level < order.level).every(item => item.status === 'open');
+      if (lowerOpen) intents.push({type: 'entry', level: order.level, price: order.entry});
       continue;
     }
     if (order.status === 'open' && order.brokerOrderId && !order.exitBrokerOrderId) {
@@ -49,10 +50,20 @@ function filled(row) {
   return /complete|executed|traded|filled/i.test(String(row.status || '')) || (qty > 0 && done >= qty);
 }
 
-export function applyBrokerFills(orders, bookOrders = [], close) {
+export function applyBrokerFills(orders, bookOrders = [], close, {now = Date.now(), trustedBook = false} = {}) {
   const byId = new Map(bookOrders.map(row => [String(row.orderId), row]));
   for (const order of orders) {
     const entry = byId.get(String(order.brokerOrderId || ''));
+    if (!entry && trustedBook && order.status === 'pending' && order.brokerOrderId) {
+      const placed = Number(order.brokerPlacedAt) || 0;
+      if (now - placed > 120000) {
+        order.status = 'draft';
+        order.brokerOrderId = '';
+        order.brokerPlacedAt = null;
+        order.staleCleared = true;
+      }
+      continue;
+    }
     if (entry && /reject/i.test(String(entry.status || '')) && order.status === 'pending') {
       order.status = 'rejected';
       order.rejectReason = entry.reason || entry.status;

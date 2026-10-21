@@ -1,4 +1,4 @@
-const chartIntervals = new Set(['1minute', '5minute', '15minute', '30minute', '60minute']);
+const chartIntervals = new Set(['1minute', '3minute', '5minute', '15minute', '30minute', '60minute']);
 function normalizeInterval(value) {
   const interval = String(value || '15minute').toLowerCase();
   return chartIntervals.has(interval) ? interval : '15minute';
@@ -94,8 +94,10 @@ export async function marketCandles({exchange, scripCode, symbol = '', expiry, s
   const cacheKey = `${market}:${code}:${symbol}:${expiry||''}:${strike||''}:${frame}:angel`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
-  if (cached?.value && now - cached.at < 60_000) return finish(cached.value);
+  const frameMs = ({'1minute':60,'3minute':180,'5minute':300,'15minute':900,'30minute':1800,'60minute':3600}[frame] || 900) * 1000;
+  if (cached?.value && now - cached.at < Math.min(120_000, frameMs)) return finish(cached.value);
   if (cached?.error && now < cached.until) {
+    if (cached.value) return finish(cached.value);
     throw Error(cached.error);
   }
   const pending = inflight.get(cacheKey);
@@ -116,6 +118,7 @@ async function loadCandles({market, code, symbol, expiry, strike, optionType, in
     value={exchange:market,scripCode:code,interval,source:'angel',candles,last:candles.at(-1)};
   }catch(error){
     cache.set(cacheKey,{at:Date.now(),until:Date.now()+(error.retryMs||8000),error:error.message,value:previous});
+    if(previous)return previous;
     throw error;
   }
   cache.set(cacheKey, {at:Date.now(), until:0, error:'', value});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {Strategy, sessionSignal} from './engine.js';
+import {Strategy, latestSignal, sessionSignal, upcomingSignal} from './engine.js';
 
 function seed(s,side='buy') {
   s.arm(side);
@@ -72,7 +72,17 @@ test('entries stay inside the strategy start and end time',()=>{
   const late=Date.parse(`${s.day}T10:30:00Z`);
   for(let i=0;i<6;i++)s.candle({time:new Date(late+i*900000).toISOString(),open:100,high:104,low:99,close:103});
   assert.equal(s.pending,null);
+  s.stop();
   assert.throws(()=>s.configure({strategyStart:'15:30',strategyEnd:'09:15'}),/after the start/);
+});
+test('a running strategy keeps its settings until stop',()=>{
+  const s=new Strategy();
+  s.start('buy');
+  assert.throws(()=>s.configure({gridStep:9}),/Stop the strategy/);
+  assert.equal(s.config.gridStep,7);
+  s.stop();
+  s.configure({gridStep:9});
+  assert.equal(s.config.gridStep,9);
 });
 test('existing mode keeps the current contract across a new day',()=>{
   const s=new Strategy();
@@ -99,6 +109,105 @@ test('live mode waits for a signal that forms after start',()=>{
   assert.equal(found.spot,96);
   assert.equal(found.side,'short');
 });
+test('the first buy or sell break is the upcoming signal',()=>{
+  const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:start+6*900,open:100,high:101,low:96,close:97,smaClose:100,smaOpen:100});
+  candles.push({time:start+7*900,open:97,high:98,low:94,close:95,smaClose:99,smaOpen:99});
+  const found=upcomingSignal(candles,{after:start*1000,strategyStart:'09:15',strategyEnd:'15:15'});
+  assert.equal(found.side,'short');
+  assert.equal(found.spot,96);
+});
+test('the latest confirmed signal wins for the current signal strike',()=>{
+  const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
+  candles.push({time:start+7*900,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
+  const found=latestSignal(candles,{after:0,strategyStart:'09:15',strategyEnd:'15:15'});
+  assert.equal(found.side,'buy');
+  assert.equal(found.spot,105);
+});
+test('a signal from a previous day is not used as today signal',()=>{
+  const day1=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const day2=Math.floor(Date.parse('2026-10-08T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:day1+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:day1+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
+  candles.push({time:day1+7*900,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
+  for(let i=0;i<6;i++)candles.push({time:day2+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  assert.equal(sessionSignal(candles,{direction:'buy',after:0,onDay:'2026-10-08'}),null);
+  assert.equal(sessionSignal(candles,{direction:'buy',after:0,onDay:'2026-10-07'}).spot,105);
+  assert.equal(latestSignal(candles,{after:0,onDay:'2026-10-08'}),null);
+});
+test('signal timeframe is configurable and shortens the wait for a signal',()=>{
+  const s=new Strategy();
+  s.configure({signalInterval:'5minute'});
+  assert.equal(s.config.signalInterval,'5minute');
+  assert.throws(()=>s.configure({signalInterval:'2minute'}),/signal timeframe/);
+  const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:start+i*300,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:start+6*300,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
+  candles.push({time:start+7*300,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
+  const after=(start+6*300+600)*1000;
+  assert.equal(sessionSignal(candles,{direction:'buy',after,minutes:5}),null);
+  const found=sessionSignal(candles,{direction:'buy',after,minutes:15});
+  assert.equal(found.spot,105);
+  assert.equal(found.side,'buy');
+});
+test('signals alternate like the chart arrows and the latest one wins',()=>{
+  const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
+  candles.push({time:start+7*900,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
+  candles.push({time:start+8*900,open:103,high:104,low:98,close:99,smaClose:102,smaOpen:102});
+  candles.push({time:start+9*900,open:99,high:100,low:97,close:98,smaClose:100,smaOpen:100});
+  const options={after:0,strategyStart:'09:15',strategyEnd:'15:15'};
+  assert.equal(upcomingSignal(candles,options).side,'buy');
+  const latest=latestSignal(candles,options);
+  assert.equal(latest.side,'short');
+  assert.equal(latest.spot,98);
+});
+test('a newer signal candle refreshes the breakout level',()=>{
+  const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
+  const candles=[];
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
+  candles.push({time:start+7*900,open:100,high:103,low:99,close:102,smaClose:101,smaOpen:101});
+  candles.push({time:start+8*900,open:102,high:104,low:101,close:103,smaClose:102,smaOpen:102});
+  const found=latestSignal(candles,{after:0,strategyStart:'09:15',strategyEnd:'15:15'});
+  assert.equal(found.side,'buy');
+  assert.equal(found.spot,103);
+});
+test('rejected broker orders do not block a next-signal start',()=>{
+  const s=new Strategy();
+  s.optionOrders=[{level:1,side:'buy',status:'rejected',brokerOrderId:'X1',entry:100}];
+  const snap=s.start('buy','paper',null,'live');
+  assert.equal(snap.status,'running');
+  assert.equal(snap.tradeMode,'live');
+  const t=new Strategy();
+  t.optionOrders=[{level:1,side:'buy',status:'pending',brokerOrderId:'X2',entry:100}];
+  assert.throws(()=>t.start('buy','paper',null,'live'),/Close the current option orders/);
+});
+test('a running strategy cannot be started again',()=>{
+  const s=new Strategy();
+  s.start('buy','paper',null,'live');
+  const again=s.start('buy','paper',null,'live');
+  assert.equal(again.status,'running');
+  assert.equal(again.tradeMode,'live');
+  assert.throws(()=>s.start('short','paper',null,'live'),/already running/);
+  assert.throws(()=>s.start('buy','live',null,'live'),/already running/);
+});
+test('activity clear empties the log',()=>{
+  const s=new Strategy();
+  s.log('system','hello');
+  assert.equal(s.events.length,1);
+  s.clearActivity();
+  assert.equal(s.events.length,0);
+});
 test('start and stop stay available after a kill',()=>{
   const s=new Strategy();
   s.start('buy');
@@ -112,4 +221,19 @@ test('start and stop stay available after a kill',()=>{
   s.start('short');
   assert.equal(s.status,'running');
   assert.equal(s.direction,'short');
+});
+test('call and put grids keep their own step and quantity',()=>{
+  const s=new Strategy();
+  s.configure({optionMode:'BOTH',callGridStep:5,putGridStep:11,callQuantity:1,putQuantity:2,callTargetPoints:9,putTargetPoints:4,callInitialStop:8,putInitialStop:6});
+  assert.equal(s.config.callGridStep,5);
+  assert.equal(s.config.putGridStep,11);
+  assert.equal(s.config.putQuantity,2);
+  s.optionOrder({action:'add',right:'PE',side:'short',entry:40});
+  assert.equal(s.optionOrders[0].quantity,2);
+  assert.equal(s.optionOrders[0].target,36);
+  s.optionOrder({action:'add',right:'PE',side:'short'});
+  assert.equal(s.optionOrders[1].entry,29);
+  s.optionOrder({action:'add',right:'CE',side:'buy',entry:50});
+  assert.equal(s.optionOrders[2].quantity,1);
+  assert.equal(s.optionOrders[2].target,59);
 });

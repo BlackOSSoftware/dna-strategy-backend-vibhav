@@ -8,6 +8,24 @@ function todayKey(date) {
 }
 
 const signalActions = new Set(['buy', 'sell', 'off']);
+export const sideGridKeys = ['quantity', 'maxLegs', 'entryBuffer', 'gridStep', 'targetPoints', 'initialStop', 'trailStartLeg', 'trailStep', 'tickSize'];
+const wholeGridKeys = new Set(['quantity', 'maxLegs', 'trailStartLeg']);
+
+export function sideGridField(prefix, key) {
+  return `${prefix}${key[0].toUpperCase()}${key.slice(1)}`;
+}
+
+export function sideGridSettings(config = {}, right = 'CE') {
+  const prefix = String(right).toUpperCase() === 'PE' ? 'put' : 'call';
+  const values = {};
+  for (const key of sideGridKeys) {
+    const named = Number(config[sideGridField(prefix, key)]);
+    const shared = Number(config[key]);
+    const value = Number.isFinite(named) && named > 0 ? named : shared;
+    values[key] = wholeGridKeys.has(key) ? Math.trunc(value) : value;
+  }
+  return values;
+}
 
 export function sideActions(config = {}, signal = 'buy') {
   const mode = String(config.optionMode || '').toUpperCase();

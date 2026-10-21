@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt, selectUnderlying, sideActions} from './options.js';
+import {detectNiftyOption, detectOption, optionGridRows, optionSide, optionUnderlying, premiumAt, selectUnderlying, sideActions, sideGridSettings} from './options.js';
 test('both mode runs a buy grid on the call and a sell grid on the put for a buy signal', () => {
   assert.deepEqual(sideActions({optionMode:'BOTH', callOnBuy:'buy', callOnSell:'sell', putOnBuy:'sell', putOnSell:'buy'}, 'buy'), [
     {right:'CE', action:'buy', side:'buy'},
@@ -9,6 +9,9 @@ test('both mode runs a buy grid on the call and a sell grid on the put for a buy
   assert.deepEqual(sideActions({optionMode:'CE', callOnBuy:'buy', putOnBuy:'sell'}, 'buy').map(item => item.right), ['CE']);
   assert.deepEqual(sideActions({optionMode:'BOTH', callOnBuy:'off', putOnBuy:'off'}, 'buy'), []);
   assert.equal(sideActions({optionRight:'AUTO'}, 'buy'), null);
+  assert.equal(sideGridSettings({gridStep:7, putGridStep:11, quantity:1, putQuantity:2}, 'PE').gridStep, 11);
+  assert.equal(sideGridSettings({gridStep:7, putGridStep:11, quantity:1, putQuantity:2}, 'PE').quantity, 2);
+  assert.equal(sideGridSettings({gridStep:7, quantity:1}, 'CE').gridStep, 7);
 });
 
 const asOf = new Date('2026-10-05T08:30:00+05:30');
@@ -50,6 +53,15 @@ test('detects the selected underlying, including Bank Nifty and Reliance', () =>
   assert.equal(reliance.strike, 1200);
   assert.equal(reliance.tradingSymbol, 'RELIANCE');
   assert.equal(reliance.exchange, 'NF');
+});
+
+test('bank nifty atm follows the current spot, not a far signal price', () => {
+  const chain = [];
+  for (const strike of [54800, 54900, 55000, 55800]) {
+    for (const optionType of ['CE', 'PE']) chain.push({tradingSymbol:'BANKNIFTY', expiry:'27/10/2026', strike, optionType, scripCode:strike + (optionType === 'CE' ? 1 : 2), lotSize:30, tickSize:0.05});
+  }
+  assert.equal(detectOption(chain, {symbol:'BANKNIFTY', spot:54902, moneyness:'ATM', right:'CE', asOf}).strike, 54900);
+  assert.equal(detectOption(chain, {symbol:'BANKNIFTY', spot:54902, moneyness:'ATM', right:'PE', asOf}).strike, 54900);
 });
 
 test('crude oil uses its own future price instead of another symbol option', () => {

@@ -5,8 +5,9 @@ const masterUrl='https://margincalculator.angelbroking.com/OpenAPI_File/files/Op
 const exchangeMap={NC:'NSE',BC:'BSE',NF:'NFO',BF:'BFO',MX:'MCX',RN:'CDS'};
 const indexNames=new Set(['NIFTY','NIFTY50','BANKNIFTY','NIFTYBANK','FINNIFTY','MIDCPNIFTY','SENSEX']);
 const knownIndices={NIFTY:{exchange:'NSE',token:'99926000',symbol:'Nifty 50'},NIFTY50:{exchange:'NSE',token:'99926000',symbol:'Nifty 50'},BANKNIFTY:{exchange:'NSE',token:'99926009',symbol:'Nifty Bank'},NIFTYBANK:{exchange:'NSE',token:'99926009',symbol:'Nifty Bank'},SENSEX:{exchange:'BSE',token:'99919000',symbol:'SENSEX'}};
-const intervals={'1minute':'ONE_MINUTE','5minute':'FIVE_MINUTE','15minute':'FIFTEEN_MINUTE','30minute':'THIRTY_MINUTE','60minute':'ONE_HOUR'};
+const intervals={'1minute':'ONE_MINUTE','3minute':'THREE_MINUTE','5minute':'FIVE_MINUTE','15minute':'FIFTEEN_MINUTE','30minute':'THIRTY_MINUTE','60minute':'ONE_HOUR'};
 const quoteCache=new Map();
+const quoteJobs=new Map();
 const instrumentCache=new Map();
 let instruments=null,masterAt=0,masterJob=null;
 function expiryId(value){
@@ -38,13 +39,27 @@ export function totp(secret,now=Date.now()){
 }
 
 export class AngelData{
-  constructor(env=process.env,fetchImpl=fetch){this.env=env;this.fetch=fetchImpl;this.jwt=env.ANGEL_JWT_TOKEN||'';this.lastQuoteAt=0;this.dataError='';}
+  constructor(env=process.env,fetchImpl=fetch){this.env=env;this.fetch=fetchImpl;this.jwt=env.ANGEL_JWT_TOKEN||'';this.lastQuoteAt=0;this.dataError='';this.marketChain=Promise.resolve();this.lastMarketAt=0;this.lastHistAt=0;this.blockedUntil=0;}
+  async throttle(route){
+    const path=String(route);
+    const historical=path.includes('getCandleData');
+    if(!historical&&!/market\/v1\/quote|searchScrip/.test(path))return;
+    const gap=historical?1500:1000;
+    const key=historical?'lastHistAt':'lastMarketAt';
+    const step=async()=>{const wait=Math.max(0,gap-(Date.now()-(this[key]||0)));if(wait)await new Promise(resolve=>setTimeout(resolve,wait));this[key]=Date.now();};
+    this.marketChain=this.marketChain.then(step,step);
+    return this.marketChain;
+  }
   status(){return {configured:!!(this.env.ANGEL_API_KEY&&this.env.ANGEL_CLIENT_ID),connected:!!this.jwt,dataReady:!!this.jwt&&!this.dataError&&Date.now()-this.lastQuoteAt<30000,lastQuoteAt:this.lastQuoteAt,dataError:this.dataError,clientId:this.env.ANGEL_CLIENT_ID||''};}
   async request(route,body,{auth=true}={}){
     if(!this.env.ANGEL_API_KEY)throw Error('Angel API key is missing');
     if(auth&&!this.jwt)throw Error('Connect Angel One for market data');
     const headers={'Content-Type':'application/json',Accept:'application/json','X-PrivateKey':this.env.ANGEL_API_KEY,'X-SourceID':this.env.ANGEL_SOURCE_ID||'WEB','X-ClientLocalIP':this.env.ANGEL_CLIENT_LOCAL_IP||'127.0.0.1','X-ClientPublicIP':this.env.ANGEL_CLIENT_PUBLIC_IP||'127.0.0.1','X-MACAddress':this.env.ANGEL_MAC_ADDRESS||'00:00:00:00:00:00','X-UserType':this.env.ANGEL_USER_TYPE||'USER'};
     if(auth)headers.Authorization=`Bearer ${this.jwt}`;
+    if(this.blockedUntil&&Date.now()<this.blockedUntil&&/market\/v1\/quote|historical\/v1\/getCandleData|searchScrip/.test(String(route))){
+      const error=Error('Angel data is rate-limited; retry shortly');error.retryMs=this.blockedUntil-Date.now();throw error;
+    }
+    await this.throttle(route);
     const response=await this.fetch(`${base}${route}`,{method:'POST',headers,body:JSON.stringify(body),signal:AbortSignal.timeout(Number(this.env.ANGEL_REQUEST_TIMEOUT_SEC||10)*1000)});
     const raw=typeof response.text==='function'?await response.text():JSON.stringify(await response.json().catch(()=>null));
     let payload=null;
@@ -53,7 +68,7 @@ export class AngelData{
       const rateLimited=/exceeding access rate|too many requests/i.test(raw);
       if(response.status===401||(response.status===403&&!rateLimited)||/token.*(invalid|expired)/i.test(payload?.message||''))this.jwt='';
       const message=payload?.message||(rateLimited?'Angel data is rate-limited; retry shortly':`Angel API failed (HTTP ${response.status})`);
-      const error=Error(message);if(rateLimited)error.retryMs=60000;throw error;
+      const error=Error(message);if(rateLimited){error.retryMs=60000;this.blockedUntil=Date.now()+60000;}throw error;
     }
     return payload?.data;
   }
@@ -61,7 +76,7 @@ export class AngelData{
     if(!this.env.ANGEL_CLIENT_ID||!this.env.ANGEL_PIN||!this.env.ANGEL_TOTP_SECRET)throw Error('Angel login credentials are missing on the backend');
     const data=await this.request('/rest/auth/angelbroking/user/v1/loginByPassword',{clientcode:this.env.ANGEL_CLIENT_ID,password:this.env.ANGEL_PIN,totp:totp(this.env.ANGEL_TOTP_SECRET)},{auth:false});
     if(!data?.jwtToken)throw Error('Angel login returned no access token');
-    this.jwt=data.jwtToken;this.lastQuoteAt=0;this.dataError='';return this.status();
+    this.jwt=data.jwtToken;this.lastQuoteAt=0;this.dataError='';this.blockedUntil=0;return this.status();
   }
   logout(){this.jwt='';this.lastQuoteAt=0;this.dataError='';quoteCache.clear();return this.status();}
   async master(){
@@ -115,15 +130,25 @@ export class AngelData{
   }
   async fetchQuote(contract){
     const item=await this.instrument(contract);const key=`${item.exchange}:${item.token}`;
-    const cached=quoteCache.get(key);if(cached&&Date.now()-cached.at<2000){this.lastQuoteAt=cached.at;this.dataError='';return cached.value;}
-    const data=await this.request('/rest/secure/angelbroking/market/v1/quote/',{mode:'LTP',exchangeTokens:{[item.exchange]:[item.token]}});
-    const row=data?.fetched?.find(row=>String(row.symbolToken||row.symboltoken)===item.token)||data?.fetched?.[0];
-    const price=Number(row?.ltp);if(!(price>0))throw Error(`Angel quote is unavailable for ${item.symbol}`);
-    const value={price,source:'angel',symbol:item.symbol,token:item.token};this.lastQuoteAt=Date.now();this.dataError='';quoteCache.set(key,{at:this.lastQuoteAt,value});return value;
+    const cached=quoteCache.get(key);if(cached&&Date.now()-cached.at<4000){this.lastQuoteAt=cached.at;this.dataError='';return cached.value;}
+    if(quoteJobs.has(key))return quoteJobs.get(key);
+    const job=(async()=>{
+      const data=await this.request('/rest/secure/angelbroking/market/v1/quote/',{mode:'LTP',exchangeTokens:{[item.exchange]:[item.token]}});
+      const row=data?.fetched?.find(row=>String(row.symbolToken||row.symboltoken)===item.token)||data?.fetched?.[0];
+      const price=Number(row?.ltp);if(!(price>0))throw Error(`Angel quote is unavailable for ${item.symbol}`);
+      const value={price,source:'angel',symbol:item.symbol,token:item.token};this.lastQuoteAt=Date.now();this.dataError='';quoteCache.set(key,{at:this.lastQuoteAt,value});return value;
+    })();
+    quoteJobs.set(key,job);
+    try{return await job;}catch(error){
+      const stale=quoteCache.get(key);
+      if(stale&&Date.now()-stale.at<600000)return stale.value;
+      throw error;
+    }finally{quoteJobs.delete(key);}
   }
   async candles(contract,interval='15minute'){
     const item=await this.instrument(contract);const frame=intervals[String(interval).toLowerCase()]||'FIFTEEN_MINUTE';
-    const end=new Date(),start=new Date(end.getTime()-5*86400000);
+    const days={ONE_MINUTE:2,THREE_MINUTE:2,FIVE_MINUTE:3,FIFTEEN_MINUTE:5,THIRTY_MINUTE:7,ONE_HOUR:10}[frame]||5;
+    const end=new Date(),start=new Date(end.getTime()-days*86400000);
     const fmt=date=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date).replace('T',' ');
     const data=await this.request('/rest/secure/angelbroking/historical/v1/getCandleData',{exchange:item.exchange,symboltoken:item.token,interval:frame,fromdate:fmt(start),todate:fmt(end)});
     if(!Array.isArray(data)||!data.length)throw Error(`Angel candles are unavailable for ${item.symbol}`);

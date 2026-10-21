@@ -41,3 +41,27 @@ test('place posts the order and keeps the Sharekhan order id', async () => {
   assert.equal(sent.quantity, 65);
   assert.equal(result.orderId, '778899');
 });
+
+test('cancel repeats the scrip from the original order', async () => {
+  let sent;
+  const order = {
+    side:'short', entry:14.7, quantity:1, brokerOrderId:'2111',
+    brokerOrder:{customerId:1, scripCode:580629, tradingSymbol:'CRUDEOIL', exchange:'MX', transactionType:'S', quantity:100, price:'14.70', requestType:'NEW', instrumentType:'OS', strikePrice:'8950', optionType:'PE', expiry:'15/10/2026', rmsCode:'SKMCX12', productType:'INVESTMENT'}
+  };
+  await submitLiveOrder({
+    apiKey:'key', accessToken:'token', customerId:'99', loginId:'APILOGIN',
+    contract:{tradingSymbol:'CRUDEOIL', exchange:'MX', scripCode:'111', strike:9000, optionType:'CE', expiry:'15/10/2026', lotSize:100},
+    order, productType:'INVESTMENT',
+    fetchImpl:async (_url, options) => {
+      sent = JSON.parse(options.body);
+      return {ok:true, status:200, json:async () => ({status:200, data:{orderId:'2111'}})};
+    }
+  });
+  assert.equal(sent.requestType, 'CANCEL');
+  assert.equal(sent.orderId, '2111');
+  assert.equal(sent.scripCode, 580629);
+  assert.equal(sent.optionType, 'PE');
+  assert.equal(sent.exchange, 'MX');
+  assert.equal(sent.rmsCode, 'SKMCX12');
+  assert.equal(sent.customerId, 99);
+});

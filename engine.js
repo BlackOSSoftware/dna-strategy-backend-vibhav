@@ -1,9 +1,11 @@
+import {sideGridField, sideGridKeys, sideGridSettings} from './options.js';
+
 export const defaults = Object.freeze({
   symbol: 'DEMO', exchange: 'NC', scripCode: '', productType: 'INVESTMENT',
   quantity: 1, maxLegs: 4, entryBuffer: 2, gridStep: 7, targetPoints: 12,
   initialStop: 20, trailStartLeg: 3, trailStep: 8,
   maxLoss: 5000, maxProfit: 20000, tickSize: 0.05,
-  strategyStart: '09:15', strategyEnd: '15:15',
+  strategyStart: '09:15', strategyEnd: '15:15', signalInterval: '15minute',
   optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO', optionMode: 'BOTH',
   callOnBuy: 'buy', callOnSell: 'sell', putOnBuy: 'sell', putOnSell: 'buy',
   gridSource: 'premium'
@@ -27,29 +29,73 @@ const istMinutes = ts => {
   return (hour === '24' ? 0 : Number(hour)) * 60 + Number(minute);
 };
 
-export function sessionSignal(candles, {direction = 'buy', after = 0, strategyStart = '09:15', strategyEnd = '15:15'} = {}) {
+export function sessionSignal(candles, {direction = 'buy', after = 0, strategyStart = '09:15', strategyEnd = '15:15', onDay = '', minutes = 15} = {}) {
   const start = clockMinutes(strategyStart) ?? 9 * 60 + 15;
   const end = clockMinutes(strategyEnd) ?? 15 * 60 + 15;
+  const span = Math.max(1, Number(minutes) || 15) * 60;
   const afterSec = after > 1e12 ? Math.floor(after / 1000) : Math.floor(Number(after) || 0);
+  const rows = Array.isArray(candles) ? candles : [];
+  const targetDay = onDay || (rows.length ? day(Number(rows[rows.length - 1].time) * 1000) : '');
   let level = null;
-  for (let index = 0; index < candles.length; index++) {
-    const candle = candles[index];
+  for (let index = 0; index < rows.length; index++) {
+    const candle = rows[index];
     const time = Number(candle.time);
     if (!Number.isFinite(time)) continue;
+    if (targetDay && day(time * 1000) !== targetDay) continue;
     const minute = istMinutes(time * 1000);
     if (minute < start || minute >= end) continue;
     if (level && (direction === 'short' ? candle.low < level.low : candle.high > level.high)) {
       return {day:day(time * 1000), side:direction, spot:direction === 'short' ? level.low : level.high, time};
     }
-    const closed = index < candles.length - 1 || Date.now() >= time * 1000 + 15 * 60 * 1000;
-    if (!closed || candle.smaClose == null || candle.smaOpen == null || level) continue;
-    if (time + 15 * 60 <= afterSec) continue;
+    const closed = index < rows.length - 1 || Date.now() >= time * 1000 + span * 1000;
+    if (!closed || candle.smaClose == null || candle.smaOpen == null) continue;
+    if (time + span <= afterSec) continue;
     const buy = direction !== 'short' && candle.close > candle.open && candle.close > candle.smaClose && candle.close > candle.smaOpen;
     const sell = direction === 'short' && candle.close < candle.open && candle.close < candle.smaClose && candle.close < candle.smaOpen;
     if (buy) level = {high:candle.high};
     if (sell) level = {low:candle.low};
   }
   return null;
+}
+
+export function signalSequence(candles, {after = 0, strategyStart = '09:15', strategyEnd = '15:15', onDay = '', minutes = 15} = {}) {
+  const start = clockMinutes(strategyStart) ?? 9 * 60 + 15;
+  const end = clockMinutes(strategyEnd) ?? 15 * 60 + 15;
+  const span = Math.max(1, Number(minutes) || 15) * 60;
+  const afterSec = after > 1e12 ? Math.floor(after / 1000) : Math.floor(Number(after) || 0);
+  const rows = Array.isArray(candles) ? candles : [];
+  const targetDay = onDay || (rows.length ? day(Number(rows[rows.length - 1].time) * 1000) : '');
+  const signals = [];
+  let buyLevel = null, sellLevel = null, last = null;
+  for (let index = 0; index < rows.length; index++) {
+    const candle = rows[index];
+    const time = Number(candle.time);
+    if (!Number.isFinite(time)) continue;
+    if (targetDay && day(time * 1000) !== targetDay) continue;
+    const minute = istMinutes(time * 1000);
+    if (minute < start || minute >= end) { buyLevel = null; sellLevel = null; continue; }
+    if (last !== 'short' && sellLevel && candle.low < sellLevel.low) {
+      signals.push({day: day(time * 1000), side: 'short', spot: sellLevel.low, time});
+      sellLevel = null; buyLevel = null; last = 'short';
+    } else if (last !== 'buy' && buyLevel && candle.high > buyLevel.high) {
+      signals.push({day: day(time * 1000), side: 'buy', spot: buyLevel.high, time});
+      buyLevel = null; sellLevel = null; last = 'buy';
+    }
+    const closed = index < rows.length - 1 || Date.now() >= time * 1000 + span * 1000;
+    if (!closed || candle.smaClose == null || candle.smaOpen == null) continue;
+    if (time + span <= afterSec) continue;
+    if (last !== 'short' && candle.close < candle.open && candle.close < candle.smaClose && candle.close < candle.smaOpen) sellLevel = {low: candle.low};
+    if (last !== 'buy' && candle.close > candle.open && candle.close > candle.smaClose && candle.close > candle.smaOpen) buyLevel = {high: candle.high};
+  }
+  return signals;
+}
+
+export function upcomingSignal(candles, options = {}) {
+  return signalSequence(candles, options)[0] || null;
+}
+
+export function latestSignal(candles, options = {}) {
+  return signalSequence(candles, options).at(-1) || null;
 }
 
 export class Strategy {
@@ -64,12 +110,15 @@ export class Strategy {
   }
   log(type, message, data = {}) { this.events.unshift({id:this.nextId++, time:new Date().toISOString(), type, message, ...data}); this.events.length = Math.min(this.events.length, 200); }
   configure(input) {
-    if (this.status === 'running' && this.legs.length) throw Error('Close positions before changing settings');
+    if (this.status === 'running') throw Error('Stop the strategy before changing settings');
     const next = {...defaults, ...this.config, ...input};
     const start = clockValue(next.strategyStart), end = clockValue(next.strategyEnd);
     if (!start || !end) throw Error('Strategy start and end must be a time like 09:15');
     if (clockMinutes(start) >= clockMinutes(end)) throw Error('Strategy end must be after the start');
     next.strategyStart = start; next.strategyEnd = end;
+    const frame = String(next.signalInterval || '15minute').toLowerCase();
+    if (!['1minute', '3minute', '5minute', '15minute', '30minute', '60minute'].includes(frame)) throw Error('Choose a signal timeframe of 1, 3, 5, 15, 30, or 60 minutes');
+    next.signalInterval = frame;
     const labels = {quantity:'Quantity per leg',maxLegs:'Maximum legs',entryBuffer:'Entry buffer',gridStep:'Grid step',targetPoints:'Target per leg',initialStop:'Initial stop',trailStartLeg:'Trail starts at leg',trailStep:'Trailing step',maxLoss:'Max daily loss',maxProfit:'Max daily profit',tickSize:'Tick size'};
     for (const k of Object.keys(labels)) {
       if (!Number.isFinite(+next[k]) || +next[k] <= 0) throw Error(`${labels[k]} must be greater than 0`);
@@ -92,6 +141,20 @@ export class Strategy {
       if (!['buy', 'sell', 'off'].includes(action)) throw Error('Each signal action must be a buy grid, sell grid, or off');
       next[key] = action;
     }
+    const sideLabels = {quantity:'quantity per leg',maxLegs:'maximum legs',entryBuffer:'entry buffer',gridStep:'grid step',targetPoints:'target per leg',initialStop:'initial stop',trailStartLeg:'trail start',trailStep:'trailing step',tickSize:'tick size'};
+    for (const prefix of ['call', 'put']) {
+      const title = prefix === 'call' ? 'Call' : 'Put';
+      for (const key of sideGridKeys) {
+        const name = sideGridField(prefix, key);
+        const raw = next[name] == null || next[name] === '' ? next[key] : next[name];
+        const value = Number(raw);
+        if (!Number.isFinite(value) || value <= 0) throw Error(`${title} ${sideLabels[key]} must be greater than 0`);
+        if (['quantity', 'maxLegs', 'trailStartLeg'].includes(key) && !Number.isInteger(value)) throw Error(`${title} ${sideLabels[key]} must be a whole number`);
+        next[name] = ['quantity', 'maxLegs', 'trailStartLeg'].includes(key) ? Math.trunc(value) : value;
+      }
+      if (next[sideGridField(prefix, 'trailStartLeg')] > next[sideGridField(prefix, 'maxLegs')]) throw Error(`${title} trail start cannot exceed maximum legs`);
+    }
+    Object.assign(next, sideGridSettings(next, mode === 'PE' ? 'PE' : 'CE'));
     next.gridSource = next.gridSource === 'signal' ? 'signal' : 'premium';
     next.symbol = String(next.symbol || '').trim().toUpperCase();
     if (!next.symbol) throw Error('Symbol is required');
@@ -110,9 +173,13 @@ export class Strategy {
     if (!['buy','short'].includes(direction)) throw Error('Choose buy or short');
     if (this.legs.length) throw Error('Open positions must be closed before starting again');
     const nextTrade = tradeMode === 'live' ? 'live' : 'existing';
-    const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || order.brokerOrderId);
+    if (this.status === 'running') {
+      if (this.direction === direction && this.tradeMode === nextTrade && this.mode === mode) return this.snapshot();
+      throw Error('Strategy is already running; stop it before starting again');
+    }
+    const dead = new Set(['rejected', 'cancelled', 'canceled']);
+    const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !dead.has(String(order.status || '').toLowerCase())));
     if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
-    if (this.status === 'running' && this.direction === direction && this.tradeMode === nextTrade) return this.snapshot();
     if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade) { this.mode = mode; return this.resume(); }
     if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
       const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice};
@@ -155,6 +222,7 @@ export class Strategy {
     this.status='killed'; this.haltReason='Manual kill'; this.log('risk','Kill switch activated'); return this.snapshot();
   }
   newDay() { if (this.legs.length) throw Error('Open positions must be closed first'); this.reset(); this.log('system','New trading day reset'); return this.snapshot(); }
+  clearActivity() { this.events = []; return this.snapshot(); }
   sma(length, source) { if (this.candles.length < length) return null; return this.candles.slice(-length).reduce((a,c)=>a+c[source],0)/length; }
   candle(c) {
     for (const k of ['open','high','low','close']) if (!Number.isFinite(+c[k])) throw Error(`Invalid candle ${k}`);
@@ -270,11 +338,13 @@ export class Strategy {
       this.optionOrders = [...this.orders(), ...seeded];
     }
     if (action === 'add') {
-      const last = this.optionOrders.at(-1);
+      const slot = right || 'CE';
+      const grid = sideGridSettings(this.config, slot);
+      const last = this.optionOrders.filter(order => (order.right || 'CE') === slot).at(-1);
       const side = input.side === 'short' || last?.side === 'short' ? 'short' : 'buy';
       const sign = side === 'short' ? -1 : 1;
-      const entry = last ? last.entry + sign * this.config.gridStep : Number(input.entry);
-      this.optionOrders.push(this.draftOrder({side, right, entry, target:entry + sign * this.config.targetPoints, stop:entry - sign * this.config.initialStop, quantity:this.config.quantity}));
+      const entry = last ? last.entry + sign * grid.gridStep : Number(input.entry);
+      this.optionOrders.push(this.draftOrder({side, right:slot, entry, target:entry + sign * grid.targetPoints, stop:entry - sign * grid.initialStop, quantity:grid.quantity}));
       this.numberOrders();
       this.log('order', `Added level ${this.optionOrders.length}`);
       return this.snapshot();
@@ -306,6 +376,10 @@ export class Strategy {
   }
   draftOrder(row) {
     const order = {id:this.nextId++, level:Number(row.level) || 0, side:row.side === 'short' ? 'short' : 'buy', right:String(row.right || '').toUpperCase(), entry:0, target:0, stop:0, quantity:this.config.quantity, status:'draft'};
+    if (row.scripCode) order.scripCode = String(row.scripCode);
+    if (Number(row.strike) > 0) order.strike = Number(row.strike);
+    if (row.expiry) order.expiry = row.expiry;
+    if (row.tradingSymbol) order.tradingSymbol = row.tradingSymbol;
     this.applyOrder(order, row);
     return order;
   }
@@ -355,7 +429,7 @@ export class Strategy {
     this.realized = fmt(this.realized + order.pnl);
     this.log('exit', `Option level ${order.level} ${reason} at ${order.exit}`, {pnl:order.pnl});
   }
-  snapshot() { return {config:this.config,direction:this.direction,status:this.status,mode:this.mode,tradeMode:this.tradeMode||'existing',signal:this.signal||null,startedAt:this.startedAt||null,day:this.day,
+  snapshot() { return {config:this.config,signalFrame:this.config.signalInterval||'15minute',direction:this.direction,status:this.status,mode:this.mode,tradeMode:this.tradeMode||'existing',signal:this.signal||null,startedAt:this.startedAt||null,day:this.day,
     candles:this.candles,pending:this.pending,legs:this.legs,history:this.history,events:this.events,
     realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice,gridKey:this.gridKey||''}; }
 }

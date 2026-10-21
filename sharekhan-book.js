@@ -95,7 +95,14 @@ export function mapOrder(row) {
     status: String(first(row, ['orderStatus', 'status', 'orderstate']) ?? '—'),
     reason: String(first(row, ['errorMsg', 'errorMessage', 'rejectionReason', 'rejectReason', 'rmsReason', 'remarks', 'orderRemarks']) ?? '').trim(),
     product: String(first(row, ['productType', 'product']) ?? '—'),
-    exchange: String(first(row, ['exchange']) ?? '')
+    exchange: String(first(row, ['exchange']) ?? ''),
+    tradingSymbol: String(first(row, ['tradingSymbol', 'symbol', 'scripName']) ?? ''),
+    scripCode: String(first(row, ['scripCode', 'scripcode', 'scrip_code']) ?? ''),
+    instrumentType: String(first(row, ['instrumentType', 'instType']) ?? ''),
+    strike: numOrNull(first(row, ['strikePrice', 'strike'])),
+    optionType: String(first(row, ['optionType', 'optiontype']) ?? ''),
+    expiry: String(first(row, ['expiry', 'expiryDate', 'expirydate']) ?? ''),
+    rmsCode: String(first(row, ['rmsCode', 'rmscode']) ?? '')
   };
 }
 

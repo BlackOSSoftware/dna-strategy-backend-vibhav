@@ -15,7 +15,14 @@ test('day report and net position payloads become order book rows', () => {
     status: 'Fully Executed',
     reason: '',
     product: 'INVESTMENT',
-    exchange: 'NF'
+    exchange: 'NF',
+    tradingSymbol: 'NIFTY',
+    scripCode: '',
+    instrumentType: '',
+    strike: 22550,
+    optionType: 'CE',
+    expiry: '06/10/2026',
+    rmsCode: ''
   });
   const positions = listFrom({data: {netPositions: [{tradingSymbol: 'NIFTY', buyQty: 65, sellQty: 0, avgPrice: 83.3, ltp: 85, pnl: 110.5, productType: 'INVESTMENT'}]}});
   assert.equal(mapPosition(positions[0]).side, 'BUY');
