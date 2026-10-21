@@ -101,9 +101,9 @@ test('live mode waits for a signal that forms after start',()=>{
   assert.equal(s.signal,null);
   const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:start+6*900,open:100,high:101,low:96,close:97,smaClose:100,smaOpen:100});
-  candles.push({time:start+7*900,open:97,high:98,low:95,close:96,smaClose:99,smaOpen:99});
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:start+6*900,open:100,high:101,low:96,close:97,emaClose:100,emaOpen:100});
+  candles.push({time:start+7*900,open:97,high:98,low:95,close:96,emaClose:99,emaOpen:99});
   assert.equal(sessionSignal(candles,{direction:'short',after:(start+8*900)*1000}),null);
   const found=sessionSignal(candles,{direction:'short',after:start*1000});
   assert.equal(found.spot,96);
@@ -112,9 +112,9 @@ test('live mode waits for a signal that forms after start',()=>{
 test('the first buy or sell break is the upcoming signal',()=>{
   const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:start+6*900,open:100,high:101,low:96,close:97,smaClose:100,smaOpen:100});
-  candles.push({time:start+7*900,open:97,high:98,low:94,close:95,smaClose:99,smaOpen:99});
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:start+6*900,open:100,high:101,low:96,close:97,emaClose:100,emaOpen:100});
+  candles.push({time:start+7*900,open:97,high:98,low:94,close:95,emaClose:99,emaOpen:99});
   const found=upcomingSignal(candles,{after:start*1000,strategyStart:'09:15',strategyEnd:'15:15'});
   assert.equal(found.side,'short');
   assert.equal(found.spot,96);
@@ -122,9 +122,9 @@ test('the first buy or sell break is the upcoming signal',()=>{
 test('the latest confirmed signal wins for the current signal strike',()=>{
   const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
-  candles.push({time:start+7*900,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,emaClose:100,emaOpen:100});
+  candles.push({time:start+7*900,open:104,high:106,low:102,close:103,emaClose:101,emaOpen:101});
   const found=latestSignal(candles,{after:0,strategyStart:'09:15',strategyEnd:'15:15'});
   assert.equal(found.side,'buy');
   assert.equal(found.spot,105);
@@ -133,10 +133,10 @@ test('a signal from a previous day is not used as today signal',()=>{
   const day1=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const day2=Math.floor(Date.parse('2026-10-08T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:day1+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:day1+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
-  candles.push({time:day1+7*900,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
-  for(let i=0;i<6;i++)candles.push({time:day2+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
+  for(let i=0;i<6;i++)candles.push({time:day1+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:day1+6*900,open:100,high:105,low:99,close:104,emaClose:100,emaOpen:100});
+  candles.push({time:day1+7*900,open:104,high:106,low:102,close:103,emaClose:101,emaOpen:101});
+  for(let i=0;i<6;i++)candles.push({time:day2+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
   assert.equal(sessionSignal(candles,{direction:'buy',after:0,onDay:'2026-10-08'}),null);
   assert.equal(sessionSignal(candles,{direction:'buy',after:0,onDay:'2026-10-07'}).spot,105);
   assert.equal(latestSignal(candles,{after:0,onDay:'2026-10-08'}),null);
@@ -148,9 +148,9 @@ test('signal timeframe is configurable and shortens the wait for a signal',()=>{
   assert.throws(()=>s.configure({signalInterval:'2minute'}),/signal timeframe/);
   const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:start+i*300,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:start+6*300,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
-  candles.push({time:start+7*300,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
+  for(let i=0;i<6;i++)candles.push({time:start+i*300,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:start+6*300,open:100,high:105,low:99,close:104,emaClose:100,emaOpen:100});
+  candles.push({time:start+7*300,open:104,high:106,low:102,close:103,emaClose:101,emaOpen:101});
   const after=(start+6*300+600)*1000;
   assert.equal(sessionSignal(candles,{direction:'buy',after,minutes:5}),null);
   const found=sessionSignal(candles,{direction:'buy',after,minutes:15});
@@ -160,11 +160,11 @@ test('signal timeframe is configurable and shortens the wait for a signal',()=>{
 test('signals alternate like the chart arrows and the latest one wins',()=>{
   const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
-  candles.push({time:start+7*900,open:104,high:106,low:102,close:103,smaClose:101,smaOpen:101});
-  candles.push({time:start+8*900,open:103,high:104,low:98,close:99,smaClose:102,smaOpen:102});
-  candles.push({time:start+9*900,open:99,high:100,low:97,close:98,smaClose:100,smaOpen:100});
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,emaClose:100,emaOpen:100});
+  candles.push({time:start+7*900,open:104,high:106,low:102,close:103,emaClose:101,emaOpen:101});
+  candles.push({time:start+8*900,open:103,high:104,low:98,close:99,emaClose:102,emaOpen:102});
+  candles.push({time:start+9*900,open:99,high:100,low:97,close:98,emaClose:100,emaOpen:100});
   const options={after:0,strategyStart:'09:15',strategyEnd:'15:15'};
   assert.equal(upcomingSignal(candles,options).side,'buy');
   const latest=latestSignal(candles,options);
@@ -174,10 +174,10 @@ test('signals alternate like the chart arrows and the latest one wins',()=>{
 test('a newer signal candle refreshes the breakout level',()=>{
   const start=Math.floor(Date.parse('2026-10-07T09:15:00+05:30')/1000);
   const candles=[];
-  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,smaClose:100,smaOpen:100});
-  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,smaClose:100,smaOpen:100});
-  candles.push({time:start+7*900,open:100,high:103,low:99,close:102,smaClose:101,smaOpen:101});
-  candles.push({time:start+8*900,open:102,high:104,low:101,close:103,smaClose:102,smaOpen:102});
+  for(let i=0;i<6;i++)candles.push({time:start+i*900,open:100,high:101,low:99,close:100,emaClose:100,emaOpen:100});
+  candles.push({time:start+6*900,open:100,high:105,low:99,close:104,emaClose:100,emaOpen:100});
+  candles.push({time:start+7*900,open:100,high:103,low:99,close:102,emaClose:101,emaOpen:101});
+  candles.push({time:start+8*900,open:102,high:104,low:101,close:103,emaClose:102,emaOpen:102});
   const found=latestSignal(candles,{after:0,strategyStart:'09:15',strategyEnd:'15:15'});
   assert.equal(found.side,'buy');
   assert.equal(found.spot,103);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fillIntradayGaps, marketCandles} from './market.js';
+import {emaSeries, fillIntradayGaps, marketCandles} from './market.js';
 
 test('chart candles come from Angel and retain Sharekhan routing code',async()=>{
   let received;
@@ -29,6 +29,13 @@ test('missing intraday minutes are filled flat so the chart has no gaps',()=>{
   assert.equal(filled[2].volume,0);
   const untouched=fillIntradayGaps(rows,15);
   assert.equal(untouched.length,4);
+});
+
+test('ema seeds with the simple average then weights the newest price',()=>{
+  const candles=[10,10,10,20,20].map(close=>({open:close,close}));
+  assert.deepEqual(emaSeries(candles,3,candle=>candle.close),[null,null,10,15,17.5]);
+  const opens=[5,5,5,5,25].map(open=>({open,close:open}));
+  assert.equal(emaSeries(opens,5,candle=>candle.open).at(-1),9);
 });
 
 test('market data never falls back to another provider',async()=>{

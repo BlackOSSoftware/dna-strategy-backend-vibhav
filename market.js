@@ -47,16 +47,24 @@ function normalizeRow(row) {
   return {time, open, high, low, close, volume:Number.isFinite(volume) ? volume : null};
 }
 
-function withAverages(candles) {
-  const average = (length, pick) => candles.map((_, index) => {
+export function emaSeries(candles, length, pick) {
+  const k = 2 / (length + 1);
+  let ema = null;
+  return candles.map((candle, index) => {
     if (index < length - 1) return null;
-    let sum = 0;
-    for (let offset = 0; offset < length; offset += 1) sum += pick(candles[index - offset]);
-    return Math.round((sum / length) * 100) / 100;
+    if (ema === null) {
+      let sum = 0;
+      for (let offset = 0; offset < length; offset += 1) sum += pick(candles[index - offset]);
+      ema = sum / length;
+    } else ema = pick(candle) * k + ema * (1 - k);
+    return Math.round(ema * 100) / 100;
   });
-  const closeAverage = average(5, candle => candle.close);
-  const openAverage = average(6, candle => candle.open);
-  return candles.map((candle, index) => ({...candle, smaClose:closeAverage[index], smaOpen:openAverage[index]}));
+}
+
+function withAverages(candles) {
+  const emaOpen = emaSeries(candles, 5, candle => candle.open);
+  const emaClose = emaSeries(candles, 6, candle => candle.close);
+  return candles.map((candle, index) => ({...candle, emaOpen:emaOpen[index], emaClose:emaClose[index]}));
 }
 
 const istDay = ts => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date(ts * 1000));
@@ -102,7 +110,7 @@ export function withLiveCandles(value, liveCandles) {
   return {...value, candles, last:candles.at(-1)};
 }
 export function newerCandles(base, extra) {
-  const rows = (base || []).map(({smaClose, smaOpen, ...candle}) => candle);
+  const rows = (base || []).map(({emaClose, emaOpen, ...candle}) => candle);
   const last = Number(rows.at(-1)?.time) || 0;
   const seen = new Set(rows.map(candle => candle.time));
   for (const candle of extra || []) {

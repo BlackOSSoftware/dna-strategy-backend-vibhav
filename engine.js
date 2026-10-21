@@ -48,10 +48,10 @@ export function sessionSignal(candles, {direction = 'buy', after = 0, strategySt
       return {day:day(time * 1000), side:direction, spot:direction === 'short' ? level.low : level.high, time};
     }
     const closed = index < rows.length - 1 || Date.now() >= time * 1000 + span * 1000;
-    if (!closed || candle.smaClose == null || candle.smaOpen == null) continue;
+    if (!closed || candle.emaClose == null || candle.emaOpen == null) continue;
     if (time + span <= afterSec) continue;
-    const buy = direction !== 'short' && candle.close > candle.open && candle.close > candle.smaClose && candle.close > candle.smaOpen;
-    const sell = direction === 'short' && candle.close < candle.open && candle.close < candle.smaClose && candle.close < candle.smaOpen;
+    const buy = direction !== 'short' && candle.close > candle.open && candle.close > candle.emaClose && candle.close > candle.emaOpen;
+    const sell = direction === 'short' && candle.close < candle.open && candle.close < candle.emaClose && candle.close < candle.emaOpen;
     if (buy) level = {high:candle.high};
     if (sell) level = {low:candle.low};
   }
@@ -82,10 +82,10 @@ export function signalSequence(candles, {after = 0, strategyStart = '09:15', str
       buyLevel = null; sellLevel = null; last = 'buy';
     }
     const closed = index < rows.length - 1 || Date.now() >= time * 1000 + span * 1000;
-    if (!closed || candle.smaClose == null || candle.smaOpen == null) continue;
+    if (!closed || candle.emaClose == null || candle.emaOpen == null) continue;
     if (time + span <= afterSec) continue;
-    if (last !== 'short' && candle.close < candle.open && candle.close < candle.smaClose && candle.close < candle.smaOpen) sellLevel = {low: candle.low};
-    if (last !== 'buy' && candle.close > candle.open && candle.close > candle.smaClose && candle.close > candle.smaOpen) buyLevel = {high: candle.high};
+    if (last !== 'short' && candle.close < candle.open && candle.close < candle.emaClose && candle.close < candle.emaOpen) sellLevel = {low: candle.low};
+    if (last !== 'buy' && candle.close > candle.open && candle.close > candle.emaClose && candle.close > candle.emaOpen) buyLevel = {high: candle.high};
   }
   return signals;
 }
@@ -224,7 +224,17 @@ export class Strategy {
   }
   newDay() { if (this.legs.length) throw Error('Open positions must be closed first'); this.reset(); this.log('system','New trading day reset'); return this.snapshot(); }
   clearActivity() { this.events = []; return this.snapshot(); }
-  sma(length, source) { if (this.candles.length < length) return null; return this.candles.slice(-length).reduce((a,c)=>a+c[source],0)/length; }
+  ema(length, source) {
+    if (this.candles.length < length) return null;
+    const k = 2 / (length + 1);
+    let ema = null;
+    for (let index = 0; index < this.candles.length; index++) {
+      if (index < length - 1) continue;
+      if (ema === null) { let sum = 0; for (let offset = 0; offset < length; offset++) sum += this.candles[index - offset][source]; ema = sum / length; }
+      else ema = this.candles[index][source] * k + ema * (1 - k);
+    }
+    return ema;
+  }
   candle(c) {
     for (const k of ['open','high','low','close']) if (!Number.isFinite(+c[k])) throw Error(`Invalid candle ${k}`);
     const bar = {time:c.time || new Date().toISOString(),open:+c.open,high:+c.high,low:+c.low,close:+c.close};
@@ -240,12 +250,12 @@ export class Strategy {
       else this.log('system','Existing mode continues on the current contract');
     }
     this.candles.push(bar); this.candles = this.candles.slice(-200);
-    const smaClose = this.sma(5,'close'), smaOpen = this.sma(6,'open');
-    bar.smaClose = smaClose === null ? null : fmt(smaClose);
-    bar.smaOpen = smaOpen === null ? null : fmt(smaOpen);
-    if (this.status === 'running' && !this.level && !this.pending && this.inSession(bar.time) && smaClose !== null && smaOpen !== null) {
-      const long = this.direction === 'buy' && bar.close > bar.open && bar.close > smaClose && bar.close > smaOpen;
-      const short = this.direction === 'short' && bar.close < bar.open && bar.close < smaClose && bar.close < smaOpen;
+    const emaOpen = this.ema(5,'open'), emaClose = this.ema(6,'close');
+    bar.emaOpen = emaOpen === null ? null : fmt(emaOpen);
+    bar.emaClose = emaClose === null ? null : fmt(emaClose);
+    if (this.status === 'running' && !this.level && !this.pending && this.inSession(bar.time) && emaClose !== null && emaOpen !== null) {
+      const long = this.direction === 'buy' && bar.close > bar.open && bar.close > emaClose && bar.close > emaOpen;
+      const short = this.direction === 'short' && bar.close < bar.open && bar.close < emaClose && bar.close < emaOpen;
       if (long || short) {
         const raw = long ? bar.high + this.config.entryBuffer : bar.low - this.config.entryBuffer;
         this.pending = {side:this.direction, price:fmt(round(raw,this.config.tickSize)), time:bar.time};
