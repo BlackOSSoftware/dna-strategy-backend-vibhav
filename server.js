@@ -121,7 +121,7 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
         const contract=await resolveOption({...selection,optionRight:right},direction,strikeSpot,market);
         let quote=null;
         try{quote=await optionQuote(contract);}catch(error){quote={error};}
-        display.push({...contract,side:direction==='short'?'short':'buy',price:quote?.price||null,anchor:null,gridSource,signalTime:null,grid:[],gridError:`${direction==='short'?'Sell':'Buy'} signal: ${right} grid is Off in settings, so no trade will be placed on this signal.`,orders:[]});
+        display.push({...contract,side:direction==='short'?'short':'buy',off:true,price:quote?.price||null,anchor:null,gridSource,signalTime:null,grid:[],gridError:`${direction==='short'?'Sell':'Buy'} signal: ${right} grid is Off in settings, so no trade will be placed on this signal.`,orders:[]});
       }catch(error){display.push({optionType:right,side:direction==='short'?'short':'buy',label:'',grid:[],gridError:error.message,orders:[],gridSource});}
     }
     engine.sideContracts={};
