@@ -86,7 +86,7 @@ export async function sendSharekhanOrder({apiKey, accessToken, body, fetchImpl =
 
 export function cancelOrderBody({customerId, loginId, order}) {
   const original = order?.brokerOrder;
-  if (!original?.scripCode) return null;
+  if (!original?.scripCode || !order?.brokerOrderId) return null;
   return {
     ...original,
     customerId: Number(customerId),

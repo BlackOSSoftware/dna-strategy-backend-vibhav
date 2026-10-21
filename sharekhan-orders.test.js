@@ -45,6 +45,24 @@ test('place posts the order and keeps the Sharekhan order id', async () => {
   assert.equal(result.orderId, '778899');
 });
 
+test('re-placing a previously rejected order sends NEW, not a cancel with an empty id', async () => {
+  let sent;
+  const order = {
+    side:'buy', entry:79.95, quantity:1, brokerOrderId:'',
+    brokerOrder:{customerId:1, scripCode:40699, tradingSymbol:'NIFTY', exchange:'NF', transactionType:'B', quantity:65, price:'79.95', requestType:'NEW', instrumentType:'OI', strikePrice:'22550', optionType:'CE', expiry:'06/10/2026', productType:'INVESTMENT'}
+  };
+  const result = await submitLiveOrder({
+    apiKey:'key', accessToken:'token', customerId:'12345', contract, order, productType:'BIGTRADE',
+    fetchImpl:async (_url, options) => {
+      sent = JSON.parse(options.body);
+      return {ok:true, status:200, json:async () => ({status:200, data:{orderId:'555'}})};
+    }
+  });
+  assert.equal(sent.requestType, 'NEW');
+  assert.equal(sent.productType, 'BIGTRADE');
+  assert.equal(result.orderId, '555');
+});
+
 test('cancel repeats the scrip from the original order', async () => {
   let sent;
   const order = {

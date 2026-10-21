@@ -567,7 +567,7 @@ async function liveOptionOrder(data){
   const right=String(data.right||'').toUpperCase();
   const contract=engine.sideContracts?.[right]||engine.option;
   if(!contract?.scripCode)throw Error('Detected option has no scrip code yet');
-  await angel.quote(contract);
+  try{await angel.quote(contract);}catch{/* Angel quote sirf price warm-up hai; Sharekhan order ke liye zaroori nahi */}
   const scoped=item=>(!right||(item.right||'CE')===right);
   const before=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&scoped(item));
   const wasOpen=before?.status==='open';
