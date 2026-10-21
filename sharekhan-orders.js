@@ -47,7 +47,7 @@ export function buildOptionOrder({customerId, loginId, contract, order, productT
     scripCode: Number(contract.scripCode),
     tradingSymbol: contract.tradingSymbol || 'NIFTY',
     exchange: contract.exchange || 'NF',
-    transactionType: order.side === 'short' ? 'S' : 'B',
+    transactionType: ['B', 'S', 'BM', 'SM', 'SAM'].includes(order?.transactionType) ? order.transactionType : (order.side === 'short' ? 'S' : 'B'),
     quantity: lots * lot,
     disclosedQty: 0,
     executedQty: 0,

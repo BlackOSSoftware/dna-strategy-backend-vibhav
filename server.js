@@ -575,6 +575,7 @@ async function liveOptionOrder(data){
   const previousFilled=before?.filled??null;
   engine.optionOrder({...data,live:true});
   const order=engine.orders().find(item=>item.level===Number(data.level)&&scoped(item))||engine.orders().find(item=>item.id===Number(data.id)&&scoped(item));
+  if(data.transactionType)order.transactionType=String(data.transactionType).toUpperCase();
   try{
     const sent=await sendLive(contract, order);
     order.brokerOrderId=sent.orderId;
