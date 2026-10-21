@@ -147,7 +147,7 @@ export class AngelData{
   }
   async candles(contract,interval='15minute'){
     const item=await this.instrument(contract);const frame=intervals[String(interval).toLowerCase()]||'FIFTEEN_MINUTE';
-    const days={ONE_MINUTE:2,THREE_MINUTE:2,FIVE_MINUTE:3,FIFTEEN_MINUTE:5,THIRTY_MINUTE:7,ONE_HOUR:10}[frame]||5;
+    const days={ONE_MINUTE:1,THREE_MINUTE:1,FIVE_MINUTE:2,FIFTEEN_MINUTE:5,THIRTY_MINUTE:7,ONE_HOUR:10}[frame]||5;
     const end=new Date(),start=new Date(end.getTime()-days*86400000);
     const fmt=date=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date).replace('T',' ');
     const data=await this.request('/rest/secure/angelbroking/historical/v1/getCandleData',{exchange:item.exchange,symboltoken:item.token,interval:frame,fromdate:fmt(start),todate:fmt(end)});
