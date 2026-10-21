@@ -51,6 +51,17 @@ test('a pending order missing from the broker book is cleared after a grace peri
   assert.equal(untrusted[0].status, 'pending');
 });
 
+test('parked orders from a previous signal are left untouched', () => {
+  const orders = [
+    {level:1, side:'buy', entry:100, target:112, stop:80, status:'open', brokerOrderId:'1', parked:true},
+    {level:2, side:'buy', entry:107, target:119, stop:87, status:'draft'}
+  ];
+  assert.deepEqual(liveIntents(orders, 80), []);
+  assert.deepEqual(liveIntents(orders, 120).map(item => item.level), [2]);
+  trailOpenStops(orders, 130, {trailStartLeg:1, trailStep:8});
+  assert.equal(orders[0].stop, 80);
+});
+
 test('broker fills open the entry and close the exit once', () => {
   const orders = [{level:1, side:'buy', entry:100, target:112, stop:80, status:'pending', brokerOrderId:'9', exitBrokerOrderId:'', exitReason:'target'}];
   applyBrokerFills(orders, [{orderId:'9', status:'Fully Executed', quantity:'65', filled:'65', price:100}]);

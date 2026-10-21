@@ -201,6 +201,12 @@ test('a running strategy cannot be started again',()=>{
   assert.throws(()=>s.start('short','paper',null,'live'),/already running/);
   assert.throws(()=>s.start('buy','live',null,'live'),/already running/);
 });
+test('signal lock defaults on and can be unlocked',()=>{
+  const s=new Strategy();
+  assert.equal(s.config.signalLock,true);
+  s.configure({signalLock:false});
+  assert.equal(s.config.signalLock,false);
+});
 test('activity clear empties the log',()=>{
   const s=new Strategy();
   s.log('system','hello');

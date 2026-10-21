@@ -5,7 +5,7 @@ export const defaults = Object.freeze({
   quantity: 1, maxLegs: 4, entryBuffer: 2, gridStep: 7, targetPoints: 12,
   initialStop: 20, trailStartLeg: 3, trailStep: 8,
   maxLoss: 5000, maxProfit: 20000, tickSize: 0.05,
-  strategyStart: '09:15', strategyEnd: '15:15', signalInterval: '15minute',
+  strategyStart: '09:15', strategyEnd: '15:15', signalInterval: '15minute', signalLock: true,
   optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO', optionMode: 'BOTH',
   callOnBuy: 'buy', callOnSell: 'sell', putOnBuy: 'sell', putOnSell: 'buy',
   gridSource: 'premium'
@@ -119,6 +119,7 @@ export class Strategy {
     const frame = String(next.signalInterval || '15minute').toLowerCase();
     if (!['1minute', '3minute', '5minute', '15minute', '30minute', '60minute'].includes(frame)) throw Error('Choose a signal timeframe of 1, 3, 5, 15, 30, or 60 minutes');
     next.signalInterval = frame;
+    next.signalLock = next.signalLock !== false;
     const labels = {quantity:'Quantity per leg',maxLegs:'Maximum legs',entryBuffer:'Entry buffer',gridStep:'Grid step',targetPoints:'Target per leg',initialStop:'Initial stop',trailStartLeg:'Trail starts at leg',trailStep:'Trailing step',maxLoss:'Max daily loss',maxProfit:'Max daily profit',tickSize:'Tick size'};
     for (const k of Object.keys(labels)) {
       if (!Number.isFinite(+next[k]) || +next[k] <= 0) throw Error(`${labels[k]} must be greater than 0`);

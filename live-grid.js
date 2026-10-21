@@ -6,7 +6,7 @@ const round = (value, tick = 0.05) => {
 };
 
 export function trailOpenStops(orders, price, {side = 'buy', trailStartLeg = 3, trailStep = 8, tick = 0.05} = {}) {
-  const open = orders.filter(order => order.status === 'open');
+  const open = orders.filter(order => order.status === 'open' && !order.parked);
   if (open.length < trailStartLeg) return;
   const first = orders.slice().sort((a, b) => a.level - b.level)[0];
   if (!first || !(price > 0)) return;
@@ -24,6 +24,7 @@ export function trailOpenStops(orders, price, {side = 'buy', trailStartLeg = 3, 
 export function liveIntents(orders, price, side = 'buy', now = Date.now()) {
   const intents = [];
   for (const order of orders) {
+    if (order.parked) continue;
     if (!(order.entry > 0) || !(order.stop > 0) || !(order.target > 0)) continue;
     if (order.status === 'rejected' || order.liveHoldUntil > now) continue;
     const buy = (order.side || side) !== 'short';

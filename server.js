@@ -149,7 +149,7 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
     board.side=item.side;
     rememberSideGrid(board,sideSettings);
     if(board.grid?.length)applyGridAnchor(board);
-    board.orders=engine.orders().filter(order=>(order.right||'CE')===item.right&&(!order.scripCode||!board.scripCode||String(order.scripCode)===String(board.scripCode)));
+    board.orders=engine.orders().filter(order=>!order.parked&&(order.right||'CE')===item.right&&(!order.scripCode||!board.scripCode||String(order.scripCode)===String(board.scripCode)));
     sides.push(board);
   }
   engine.sideContracts={};
@@ -230,7 +230,7 @@ async function optionBoard(url,maxAge=15000){
   if(board.grid?.length)applyGridAnchor(board);
   if(board.price)engine.markOptionPrice(board.price);
   if(JSON.stringify(engine.optionOrders||[])!==ordersBefore)await save();
-  board.orders=String(engine.option?.scripCode||'')===String(contract?.scripCode||'')?engine.orders():[];
+  board.orders=String(engine.option?.scripCode||'')===String(contract?.scripCode||'')?engine.orders().filter(order=>!order.parked):[];
   if(signalInfo)board.signalInfo=signalInfo;
   return board;
 }
@@ -339,17 +339,29 @@ async function startStrategy(data, fresh){
 async function refreshLiveSignal(){
   if(engine.tradeMode!=='live'||engine.status!=='running'||Date.now()-signalAt<20000)return;
   signalAt=Date.now();
-  if(engine.orders().some(order=>order.brokerOrderId||order.status==='open'))return;
+  const follow=engine.config.signalLock===false;
+  if(!follow&&engine.orders().some(order=>order.brokerOrderId||order.status==='open'))return;
   try{
     const market=await signalMarket();
-    const found=upcomingSignal(market.candles||[],{after:engine.startedAt||Date.now(),strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()});
+    const sequence=signalSequence(market.candles||[],{after:engine.startedAt||Date.now(),strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()});
+    const found=follow?sequence.at(-1):sequence[0];
     if(!found||engine.signal?.time===found.time)return;
     const side=found.side==='short'?'short':'buy';
-    if(!engine.orders().some(order=>order.brokerOrderId||order.status==='open'||order.status==='pending'))engine.direction=side;
-    engine.signal={...found,side};
-    engine.option=null;
-    engine.optionOrders=[];
-    engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · strike will be selected from this price`);
+    if(follow&&engine.signal?.time){
+      const parked=engine.orders().filter(order=>order.brokerOrderId&&(order.status==='open'||order.status==='pending'));
+      for(const order of parked)order.parked=true;
+      engine.optionOrders=parked;
+      engine.direction=side;
+      engine.signal={...found,side};
+      engine.option=null;
+      engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · unlock mode: working grid naye signal par shift ho gaya; purana trade broker par chhod diya gaya hai`);
+    }else{
+      if(!engine.orders().some(order=>order.brokerOrderId||order.status==='open'||order.status==='pending'))engine.direction=side;
+      engine.signal={...found,side};
+      engine.option=null;
+      engine.optionOrders=[];
+      engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · strike will be selected from this price`);
+    }
     await save();
   }catch(error){engine.log('risk',`Live signal check failed: ${error.message}`);}
 }
@@ -430,7 +442,7 @@ function seedLiveGrid(board){
   const sides=board?.sides?.length?board.sides:[board];
   for(const side of sides){
     const right=side?.optionType||'CE';
-    if(engine.orders().some(order=>(order.right||'CE')===right)||!side?.grid?.length)continue;
+    if(engine.orders().some(order=>(order.right||'CE')===right&&!order.parked)||!side?.grid?.length)continue;
     const rows=side.grid.filter(row=>row.entry>0&&row.target>0&&row.stop>0);
     if(!rows.length)continue;
     const made=rows.map(row=>engine.draftOrder({...row,side:side.side==='short'?'short':'buy',quantity:side.orderQuantity||engine.config.quantity,right,scripCode:side.scripCode,strike:side.strike,expiry:side.expiry,tradingSymbol:side.tradingSymbol}));
@@ -596,6 +608,7 @@ const server=http.createServer(async(req,res)=>{
         case '/api/sharekhan/logout':result=broker.logout();await store.clearBrokerSession();bookCache={at:0,value:null};break;
         case '/api/sharekhan/credentials':result=broker.updateCredentials(data);await store.saveSharekhanCredentials(broker.config);writeSharekhanEnv(broker.config);await store.clearBrokerSession();bookCache={at:0,value:null};break;
         case '/api/config': result=engine.configure(await assertInstrument(data));break;
+        case '/api/signal-lock': engine.config.signalLock=data.locked!==false; engine.log('settings',engine.config.signalLock?'Signal lock ON: chal raha trade hi chalega':'Signal lock OFF: naya signal aate hi grid shift hoga'); result=engine.snapshot(); break;
         case '/api/arm': result=await startStrategy(data,false);break;
         case '/api/start': result=await startStrategy(data,true);break;
         case '/api/stop': result=engine.stop();break;
