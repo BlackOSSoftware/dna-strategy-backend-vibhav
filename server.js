@@ -267,7 +267,10 @@ function applyGridAnchor(board){
     }catch(error){board.gridError=error.message;}
   };
   const previous=engine.gridKeys?.[slot]||'';
-  if(!running&&slotOrders().length&&slotOrders().every(dead))return install();
+  const idle=!running&&!slotOrders().some(active);
+  if(idle&&slotOrders().some(dead))return install();
+  const firstLevel=slotOrders().find(order=>order.level===1);
+  if(idle&&source==='signal'&&firstLevel&&Number(firstLevel.entry)!==Number(board.grid[0]?.entry))return install();
   if(source==='signal'&&!slotOrders().length)return install();
   if(!locked&&previous&&previous!==key)return install();
   if(locked&&previous&&previous!==key)board.gridHeld=true;
