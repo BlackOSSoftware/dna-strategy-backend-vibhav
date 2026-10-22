@@ -491,13 +491,13 @@ async function refreshLiveSignal(){
     if(!found||engine.signal?.time===found.time)return;
     const side=found.side==='short'?'short':'buy';
     if(follow&&engine.signal?.time){
-      const parked=engine.orders().filter(order=>order.brokerOrderId&&(order.status==='open'||order.status==='pending'));
-      for(const order of parked)order.parked=true;
-      engine.optionOrders=parked;
+      const held=engine.orders().filter(isActiveOrder);
+      engine.optionOrders=held;
       engine.direction=side;
       engine.signal={...found,side};
       engine.option=null;
-      engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · unlock mode: working grid naye signal par shift ho gaya; purana trade broker par chhod diya gaya hai`);
+      boardDirty=true;
+      engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · unlock mode: grid naye signal par shift ho gaya${held.length?`; purane ${held.length} khule level ka SL, target aur trailing chalta rahega`:''}`);
     }else{
       if(active)return;
       engine.direction=side;
