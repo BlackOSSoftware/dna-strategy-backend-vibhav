@@ -130,7 +130,7 @@ function messageOf(payload, status) {
 export function mapFunds(row) {
   if (!row || typeof row !== 'object' || row.currentCashBalance == null) return null;
   const num = value => { const number = Number(value); return Number.isFinite(number) ? number : 0; };
-  return {cash:num(row.currentCashBalance), nonCash:num(row.nonCashLimit), fnoMargin:num(row.intradayMarginFno), hold:num(row.holdFunds), withdrawal:num(row.pendingWithdrawalRequest), fnoPremium:num(row.fnoPremium)};
+  return {cash:num(row.currentCashBalance), nonCash:num(row.nonCashLimit), shareLimit:num(row.limitAgainstShares), fnoMargin:num(row.intradayMarginFno), hold:num(row.holdFunds), withdrawal:num(row.pendingWithdrawalRequest), fnoPremium:num(row.fnoPremium)};
 }
 export async function sharekhanBook({apiKey, accessToken, customerId, loginId = '', fetchImpl = fetch}) {
   const profile = {loginId:String(loginId || ''), customerId:String(customerId || '')};

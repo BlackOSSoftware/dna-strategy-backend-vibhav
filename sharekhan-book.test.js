@@ -34,6 +34,7 @@ test('day report and net position payloads become order book rows', () => {
 
 test('cash balance is read from the Sharekhan fund statement', () => {
   assert.equal(mapFunds({currentCashBalance:'10.5', nonCashLimit:1, intradayMarginFno:2, holdFunds:3, pendingWithdrawalRequest:4, fnoPremium:5}).cash, 10.5);
+  assert.equal(mapFunds({currentCashBalance:0, limitAgainstShares:'21896.23'}).shareLimit, 21896.23);
   assert.equal(mapFunds(null), null);
 });
 test('book stays empty until Sharekhan is connected and never sends an order', async () => {
