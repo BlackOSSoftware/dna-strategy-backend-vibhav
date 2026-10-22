@@ -40,8 +40,8 @@ export function liveIntents(orders, price, side = 'buy', now = Date.now()) {
     const buy = (order.side || side) !== 'short';
     const reached = buy ? price >= order.entry : price <= order.entry;
     if (!order.brokerOrderId && (order.status === 'draft' || order.status === 'pending') && reached) {
-      const lowerOpen = orders.filter(item => item.level < order.level).every(item => item.status === 'open');
-      if (lowerOpen) intents.push({type: 'entry', level: order.level, price: order.entry});
+      const lowerReady = orders.filter(item => item.level < order.level).every(item => item.status === 'open' || (item.status === 'closed' && /target/i.test(String(item.reason || item.exitReason || ''))));
+      if (lowerReady) intents.push({type: 'entry', level: order.level, price: order.entry});
       continue;
     }
     if (order.status === 'open' && order.brokerOrderId && !order.exitBrokerOrderId) {

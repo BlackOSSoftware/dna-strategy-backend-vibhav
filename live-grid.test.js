@@ -14,6 +14,27 @@ test('a higher buy level is not sent until the premium reaches it', () => {
   assert.deepEqual(liveIntents(orders, 107).map(item => item.level), [2]);
 });
 
+test('a lower level closed at target does not block the empty levels above it', () => {
+  const orders = [
+    {level:1, side:'buy', entry:120.05, target:132.05, stop:100.05, status:'closed', reason:'target', brokerOrderId:'1'},
+    {level:2, side:'buy', entry:127.05, target:139.05, stop:107.05, status:'open', brokerOrderId:'2'},
+    {level:3, side:'buy', entry:134.05, target:146.05, stop:120.05, status:'draft'},
+    {level:4, side:'buy', entry:141.05, target:153.05, stop:120.05, status:'draft'}
+  ];
+  assert.deepEqual(liveIntents(orders, 134.05).filter(item => item.type === 'entry').map(item => item.level), [3]);
+  orders[1].status = 'closed'; orders[1].reason = 'target';
+  orders[2].status = 'open'; orders[2].brokerOrderId = '3';
+  assert.deepEqual(liveIntents(orders, 141.05).filter(item => item.type === 'entry').map(item => item.level), [4]);
+});
+
+test('a lower level closed at stop still blocks the levels above it', () => {
+  const orders = [
+    {level:1, side:'buy', entry:100, target:112, stop:80, status:'closed', reason:'stop', brokerOrderId:'1'},
+    {level:2, side:'buy', entry:107, target:119, stop:87, status:'draft'}
+  ];
+  assert.deepEqual(liveIntents(orders, 107), []);
+});
+
 test('an open live buy exits on the stop or target and trails after the third fill', () => {
   const orders = [
     {level:1, side:'buy', entry:100, target:112, stop:80, status:'open', brokerOrderId:'1'},
