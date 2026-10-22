@@ -40,7 +40,7 @@ export function totp(secret,now=Date.now()){
 }
 
 export class AngelData{
-  constructor(env=process.env,fetchImpl=fetch,feed=new AngelFeed()){this.env=env;this.fetch=fetchImpl;this.feed=feed;this.jwt=env.ANGEL_JWT_TOKEN||'';this.feedToken=env.ANGEL_FEED_TOKEN||'';this.recent=new Map();this.lastQuoteAt=0;this.dataError='';this.marketChain=Promise.resolve();this.lastMarketAt=0;this.lastHistAt=0;this.blockedUntil=0;}
+  constructor(env=process.env,fetchImpl=fetch,feed=new AngelFeed()){this.env=env;this.fetch=fetchImpl;this.feed=feed;this.jwt=env.ANGEL_JWT_TOKEN||'';this.feedToken=env.ANGEL_FEED_TOKEN||'';this.recent=new Map();this.lastQuoteAt=0;this.dataError='';this.marketChain=Promise.resolve();this.lastMarketAt=0;this.lastHistAt=0;this.blocked={};}
   startFeed(){return this.feed?.start({jwt:this.jwt,apiKey:this.env.ANGEL_API_KEY,clientCode:this.env.ANGEL_CLIENT_ID,feedToken:this.feedToken});}
   async throttle(route){
     const path=String(route);
@@ -58,8 +58,10 @@ export class AngelData{
     if(auth&&!this.jwt)throw Error('Connect Angel One for market data');
     const headers={'Content-Type':'application/json',Accept:'application/json','X-PrivateKey':this.env.ANGEL_API_KEY,'X-SourceID':this.env.ANGEL_SOURCE_ID||'WEB','X-ClientLocalIP':this.env.ANGEL_CLIENT_LOCAL_IP||'127.0.0.1','X-ClientPublicIP':this.env.ANGEL_CLIENT_PUBLIC_IP||'127.0.0.1','X-MACAddress':this.env.ANGEL_MAC_ADDRESS||'00:00:00:00:00:00','X-UserType':this.env.ANGEL_USER_TYPE||'USER'};
     if(auth)headers.Authorization=`Bearer ${this.jwt}`;
-    if(this.blockedUntil&&Date.now()<this.blockedUntil&&/market\/v1\/quote|historical\/v1\/getCandleData|searchScrip/.test(String(route))){
-      const error=Error('Angel data is rate-limited; retry shortly');error.retryMs=this.blockedUntil-Date.now();throw error;
+    const kind=/getCandleData/.test(String(route))?'historical':/market\/v1\/quote/.test(String(route))?'quote':/searchScrip/.test(String(route))?'search':'';
+    const blockedUntil=kind?Number(this.blocked?.[kind])||0:0;
+    if(blockedUntil&&Date.now()<blockedUntil){
+      const error=Error('Angel data is rate-limited; retry shortly');error.retryMs=blockedUntil-Date.now();throw error;
     }
     await this.throttle(route);
     const response=await this.fetch(`${base}${route}`,{method:'POST',headers,body:JSON.stringify(body),signal:AbortSignal.timeout(Number(this.env.ANGEL_REQUEST_TIMEOUT_SEC||10)*1000)});
@@ -70,7 +72,9 @@ export class AngelData{
       const rateLimited=/exceeding access rate|too many requests/i.test(raw);
       if(response.status===401||(response.status===403&&!rateLimited)||/token.*(invalid|expired)/i.test(payload?.message||'')){this.jwt='';this.feed?.stop();}
       const message=payload?.message||(rateLimited?'Angel data is rate-limited; retry shortly':`Angel API failed (HTTP ${response.status})`);
-      const error=Error(message);if(rateLimited){error.retryMs=60000;this.blockedUntil=Date.now()+60000;}throw error;
+      const error=Error(message);
+      if(rateLimited){const pause=kind==='historical'?20000:60000;error.retryMs=pause;if(kind)this.blocked={...this.blocked,[kind]:Date.now()+pause};}
+      throw error;
     }
     return payload?.data;
   }
@@ -78,7 +82,7 @@ export class AngelData{
     if(!this.env.ANGEL_CLIENT_ID||!this.env.ANGEL_PIN||!this.env.ANGEL_TOTP_SECRET)throw Error('Angel login credentials are missing on the backend');
     const data=await this.request('/rest/auth/angelbroking/user/v1/loginByPassword',{clientcode:this.env.ANGEL_CLIENT_ID,password:this.env.ANGEL_PIN,totp:totp(this.env.ANGEL_TOTP_SECRET)},{auth:false});
     if(!data?.jwtToken)throw Error('Angel login returned no access token');
-    this.jwt=data.jwtToken;this.feedToken=data.feedToken||'';this.lastQuoteAt=0;this.dataError='';this.blockedUntil=0;this.startFeed();return this.status();
+    this.jwt=data.jwtToken;this.feedToken=data.feedToken||'';this.lastQuoteAt=0;this.dataError='';this.blocked={};this.startFeed();return this.status();
   }
   logout(){this.jwt='';this.feedToken='';this.feed?.stop();this.lastQuoteAt=0;this.dataError='';quoteCache.clear();return this.status();}
   async master(){
@@ -169,10 +173,10 @@ export class AngelData{
       throw error;
     }finally{quoteJobs.delete(key);}
   }
-  async candles(contract,interval='15minute'){
+  async candles(contract,interval='15minute',range={}){
     const item=await this.instrument(contract);const frame=intervals[String(interval).toLowerCase()]||'FIFTEEN_MINUTE';
     const days={ONE_MINUTE:1,THREE_MINUTE:1,FIVE_MINUTE:2,FIFTEEN_MINUTE:5,THIRTY_MINUTE:7,ONE_HOUR:10}[frame]||5;
-    const end=new Date(),start=new Date(end.getTime()-days*86400000);
+    const end=range.to instanceof Date?range.to:new Date(),start=range.from instanceof Date?range.from:new Date(end.getTime()-days*86400000);
     const fmt=date=>new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date).replace('T',' ');
     const data=await this.request('/rest/secure/angelbroking/historical/v1/getCandleData',{exchange:item.exchange,symboltoken:item.token,interval:frame,fromdate:fmt(start),todate:fmt(end)});
     if(!Array.isArray(data)||!data.length)throw Error(`Angel candles are unavailable for ${item.symbol}`);

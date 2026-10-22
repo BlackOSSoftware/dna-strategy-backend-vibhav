@@ -67,11 +67,33 @@ function withAverages(candles) {
   return candles.map((candle, index) => ({...candle, emaOpen:emaOpen[index], emaClose:emaClose[index]}));
 }
 
-const istDay = ts => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata', year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date(ts * 1000));
-const istMinuteOfDay = ts => {
-  const parts = new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hourCycle:'h23'}).formatToParts(new Date(ts * 1000));
-  return Number(parts.find(part => part.type === 'hour').value) * 60 + Number(parts.find(part => part.type === 'minute').value);
-};
+const IST_OFFSET = 19800;
+const istDay = ts => Math.floor((ts + IST_OFFSET) / 86400);
+const istMinuteOfDay = ts => Math.floor((((ts + IST_OFFSET) % 86400) + 86400) % 86400 / 60);
+
+export function aggregateCandles(rows, minutes) {
+  const size = Math.max(1, Number(minutes) || 1);
+  if (size === 1 || !Array.isArray(rows)) return rows;
+  const out = [];
+  let current = null, currentKey = '';
+  for (const row of rows) {
+    const minute = istMinuteOfDay(row.time);
+    const anchor = minute >= 555 ? 555 : 0;
+    const bucket = anchor + Math.floor((minute - anchor) / size) * size;
+    const key = `${istDay(row.time)}:${bucket}`;
+    if (key !== currentKey) {
+      current = {time:row.time - (minute - bucket) * 60, open:row.open, high:row.high, low:row.low, close:row.close, volume:row.volume};
+      out.push(current);
+      currentKey = key;
+    } else {
+      current.high = Math.max(current.high, row.high);
+      current.low = Math.min(current.low, row.low);
+      current.close = row.close;
+      current.volume = row.volume == null && current.volume == null ? null : (Number(current.volume) || 0) + (Number(row.volume) || 0);
+    }
+  }
+  return out;
+}
 export function fillIntradayGaps(candles, minutes) {
   const step = Math.max(0, Number(minutes) || 0) * 60;
   if (!step || !Array.isArray(candles) || candles.length < 2) return candles;
@@ -93,14 +115,17 @@ export function fillIntradayGaps(candles, minutes) {
   return out;
 }
 
-function candlesFrom(payload, minutes = 0) {
+function rowsFrom(payload) {
   const data = Array.isArray(payload) ? payload : payload?.data || payload?.candles || payload?.result || [];
   if (!Array.isArray(data)) return [];
-  const candles = data.map(normalizeRow).filter(Boolean);
+  return data.map(normalizeRow).filter(Boolean);
+}
+
+function mergeRows(older, fresh) {
   const unique = new Map();
-  for (const candle of candles) unique.set(candle.time, candle);
-  const sorted = [...unique.values()].sort((a, b) => a.time - b.time);
-  return withAverages(fillIntradayGaps(sorted, minutes)).slice(-500);
+  for (const candle of older || []) unique.set(candle.time, candle);
+  for (const candle of fresh || []) unique.set(candle.time, candle);
+  return [...unique.values()].sort((a, b) => a.time - b.time);
 }
 
 export function withLiveCandles(value, liveCandles) {
@@ -120,43 +145,53 @@ export function newerCandles(base, extra) {
   return withAverages(rows).slice(-500);
 }
 
+const BASE_DAYS = 10;
+const BASE_REFRESH_MS = 60_000;
+
+async function baseRows({market, code, symbol, expiry, strike, optionType, angel}) {
+  const key = `${market}:${code}:${symbol}:${expiry||''}:${strike||''}:${optionType||''}`;
+  const entry = cache.get(key);
+  const now = Date.now();
+  if (entry?.rows?.length && now - entry.at < BASE_REFRESH_MS) return entry;
+  if (entry?.until && now < entry.until) {
+    if (entry.rows?.length) return entry;
+    throw Error(entry.error);
+  }
+  if (inflight.has(key)) return inflight.get(key);
+  const job = (async () => {
+    const last = entry?.rows?.at(-1)?.time;
+    const from = new Date(last ? (last - 30 * 60) * 1000 : now - BASE_DAYS * 86400000);
+    try {
+      const fresh = rowsFrom(await angel.candles({exchange:market, scripCode:code, symbol, expiry, strike, optionType}, '1minute', {from, to:new Date()}));
+      const rows = mergeRows(entry?.rows, fresh).slice(-BASE_DAYS * 400);
+      if (!rows.length) throw Error('Angel returned no valid candles');
+      const next = {rows, at:Date.now(), until:0, error:'', version:(entry?.version || 0) + 1, frames:new Map()};
+      cache.set(key, next);
+      return next;
+    } catch (error) {
+      cache.set(key, {...(entry || {}), rows:entry?.rows || null, at:entry?.at || 0, until:Date.now() + (error.retryMs || 8000), error:error.message, frames:entry?.frames || new Map()});
+      if (entry?.rows?.length) return cache.get(key);
+      throw error;
+    }
+  })();
+  inflight.set(key, job);
+  try { return await job; }
+  finally { inflight.delete(key); }
+}
+
 export async function marketCandles({exchange, scripCode, symbol = '', expiry, strike, optionType, interval = '15minute', angel, liveCandles = []}) {
   if(!angel?.status().connected)throw Error('Connect Angel One for market data');
   const code = String(scripCode || '').trim();
   const market = String(exchange || '').trim().toUpperCase();
   const frame = normalizeInterval(interval);
   if (!code) throw Error('Choose a scrip from the search list to load the chart');
-  const finish = value => withLiveCandles(value, frame === '15minute' ? liveCandles : []);
-  const cacheKey = `${market}:${code}:${symbol}:${expiry||''}:${strike||''}:${frame}:angel`;
-  const now = Date.now();
-  const cached = cache.get(cacheKey);
-  const frameMs = (frameMinutes[frame] || 15) * 60 * 1000;
-  if (cached?.value && now - cached.at < Math.min(120_000, frameMs)) return finish(cached.value);
-  if (cached?.error && now < cached.until) {
-    if (cached.value) return finish(cached.value);
-    throw Error(cached.error);
+  const base = await baseRows({market, code, symbol, expiry, strike, optionType, angel});
+  let value = base.frames?.get(frame);
+  if (!value) {
+    const candles = withAverages(aggregateCandles(fillIntradayGaps(base.rows, 1), frameMinutes[frame] || 15)).slice(-500);
+    if (!candles.length) throw Error('Angel returned no valid candles');
+    value = {exchange:market, scripCode:code, interval:frame, source:'angel', candles, last:candles.at(-1)};
+    base.frames?.set(frame, value);
   }
-  const pending = inflight.get(cacheKey);
-  if (pending) return pending;
-  const job = loadCandles({market, code, symbol, expiry, strike, optionType, interval:frame, angel, cacheKey, previous:cached?.value || null});
-  inflight.set(cacheKey, job);
-  try { return finish(await job); }
-  finally { inflight.delete(cacheKey); }
-}
-
-async function loadCandles({market, code, symbol, expiry, strike, optionType, interval, angel, cacheKey, previous}) {
-  if(!angel)throw Error('Angel market data is not configured');
-  let value;
-  try{
-    const rows=await angel.candles({exchange:market,scripCode:code,symbol,expiry,strike,optionType},interval);
-    const candles=candlesFrom(rows, frameMinutes[interval] || 0);
-    if(!candles.length)throw Error('Angel returned no valid candles');
-    value={exchange:market,scripCode:code,interval,source:'angel',candles,last:candles.at(-1)};
-  }catch(error){
-    cache.set(cacheKey,{at:Date.now(),until:Date.now()+(error.retryMs||8000),error:error.message,value:previous});
-    if(previous)return previous;
-    throw error;
-  }
-  cache.set(cacheKey, {at:Date.now(), until:0, error:'', value});
-  return value;
+  return withLiveCandles(value, frame === '15minute' ? liveCandles : []);
 }
