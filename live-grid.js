@@ -61,6 +61,26 @@ function filled(row) {
   return /complete|executed|traded|filled/i.test(String(row.status || '')) || (qty > 0 && done >= qty);
 }
 
+export function manualBrokerExits(orders, bookOrders = [], claimed = new Set()) {
+  const found = [];
+  const own = new Set(orders.flatMap(order => [order.brokerOrderId, order.exitBrokerOrderId]).filter(Boolean).map(String));
+  for (const order of orders) {
+    if (order.status !== 'open' || !order.brokerOrderId || order.exitBrokerOrderId || !order.scripCode) continue;
+    const exitSide = order.side === 'short' ? 'BUY' : 'SELL';
+    const match = bookOrders.find(row => {
+      const id = String(row.orderId || '');
+      if (!id || own.has(id) || claimed.has(id)) return false;
+      if (String(row.scripCode || '') !== String(order.scripCode)) return false;
+      if (String(row.side || '').toUpperCase() !== exitSide || !filled(row)) return false;
+      return Number(id) > Number(order.brokerOrderId);
+    });
+    if (!match) continue;
+    claimed.add(String(match.orderId));
+    found.push({order, row:match, price:Number(match.execPrice) || Number(match.price) || 0});
+  }
+  return found;
+}
+
 export function applyBrokerFills(orders, bookOrders = [], close, {now = Date.now(), trustedBook = false} = {}) {
   const byId = new Map(bookOrders.map(row => [String(row.orderId), row]));
   for (const order of orders) {
@@ -87,9 +107,9 @@ export function applyBrokerFills(orders, bookOrders = [], close, {now = Date.now
     }
     if (entry && filled(entry) && order.status === 'pending') {
       order.status = 'open';
-      order.filled = order.entry;
+      order.filled = Number(entry.execPrice) > 0 ? Number(entry.execPrice) : order.entry;
     }
     const exit = byId.get(String(order.exitBrokerOrderId || ''));
-    if (exit && filled(exit) && order.status === 'open') close(order, Number(exit.price) || order.target || order.stop, order.exitReason || 'Exit');
+    if (exit && filled(exit) && order.status === 'open') close(order, Number(exit.execPrice) || Number(exit.price) || order.target || order.stop, order.exitReason || 'Exit');
   }
 }

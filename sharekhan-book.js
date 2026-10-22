@@ -90,8 +90,9 @@ export function mapOrder(row) {
     symbol: symbolOf(row),
     side: sideLabel(first(row, ['transactionType', 'buySell', 'orderSide', 'side'])),
     quantity: String(first(row, ['orderQty', 'quantity', 'qty', 'orderQuantity']) ?? '—'),
-    filled: String(first(row, ['executedQty', 'filledQty', 'tradedQty', 'fillQty']) ?? '0'),
+    filled: String(first(row, ['execQty', 'executedQty', 'filledQty', 'tradedQty', 'fillQty']) ?? '0'),
     price: numOrNull(first(row, ['orderPrice', 'price', 'limitPrice', 'avgPrice'])),
+    execPrice: numOrNull(first(row, ['execPrice', 'averagePrice', 'tradedPrice'])),
     status: String(first(row, ['orderStatus', 'status', 'orderstate']) ?? '—'),
     reason: String(first(row, ['errorMsg', 'errorMessage', 'rejectionReason', 'rejectReason', 'rmsReason', 'remarks', 'orderRemarks']) ?? '').trim(),
     product: String(first(row, ['productType', 'product']) ?? '—'),
@@ -106,20 +107,40 @@ export function mapOrder(row) {
   };
 }
 
+export function parseOptionName(name) {
+  const match = String(name || '').trim().toUpperCase().match(/^([A-Z0-9&-]+)\s+(\d{2})([A-Z]{3})(\d{4})\s+(CE|PE)\s+(\d+(?:\.\d+)?)$/);
+  if (!match) return null;
+  return {underlying:match[1], expiry:`${match[2]}${match[3]}${match[4]}`, optionType:match[5], strike:Number(match[6])};
+}
+
 export function mapPosition(row) {
   const buy = numOrNull(first(row, ['buyQty', 'buyQuantity']));
   const sell = numOrNull(first(row, ['sellQty', 'sellQuantity']));
   let quantity = first(row, ['netQty', 'netQuantity', 'quantity', 'openQty', 'qty']);
-  if (quantity == null && buy != null && sell != null) quantity = buy - sell;
+  if (quantity == null && buy != null && sell != null) quantity = buy - Math.abs(sell);
+  const net = Number(quantity) || 0;
+  const buyRate = numOrNull(first(row, ['buyRate', 'buyAvg']));
+  const sellRate = numOrNull(first(row, ['sellRate', 'sellAvg']));
+  const avgRaw = numOrNull(first(row, ['avgPrice', 'averagePrice', 'netAvg', 'netRate']));
+  const avg = avgRaw > 0 ? avgRaw : net > 0 ? buyRate : net < 0 ? sellRate : buyRate;
+  const ltpRaw = numOrNull(first(row, ['ltp', 'lastPrice', 'LTP', 'mktPrice']));
+  const tradingSymbol = String(first(row, ['tradingSymbol', 'symbol', 'scripName']) ?? '');
   return {
     symbol: symbolOf(row),
-    side: sideLabel(first(row, ['buySell', 'transactionType', 'positionSide', 'side']) || (Number(quantity) < 0 ? 'S' : Number(quantity) > 0 ? 'B' : '')),
+    side: net > 0 ? 'BUY' : net < 0 ? 'SELL' : 'CLOSED',
     quantity: quantity == null ? '—' : String(quantity),
-    avg: numOrNull(first(row, ['avgPrice', 'averagePrice', 'buyAvg', 'netAvg', 'price'])),
-    ltp: numOrNull(first(row, ['ltp', 'lastPrice', 'LTP'])),
-    pnl: numOrNull(first(row, ['pnl', 'mtm', 'unrealizedPnl', 'profitAndLoss', 'profitLoss'])),
+    net,
+    avg,
+    buyRate, sellRate,
+    ltp: ltpRaw > 0 ? ltpRaw : null,
+    booked: numOrNull(first(row, ['bpl', 'bookedPnl', 'realisedPnl', 'realizedPnl'])),
+    pnl: numOrNull(first(row, ['pnl', 'unrealizedPnl', 'profitAndLoss', 'profitLoss'])),
+    mtm: numOrNull(first(row, ['mtm'])),
     product: String(first(row, ['productType', 'product']) ?? '—'),
-    exchange: String(first(row, ['exchange']) ?? '')
+    exchange: String(first(row, ['exchange']) ?? ''),
+    scripCode: String(first(row, ['scripCode', 'scripcode']) ?? ''),
+    tradingSymbol,
+    option: parseOptionName(tradingSymbol)
   };
 }
 

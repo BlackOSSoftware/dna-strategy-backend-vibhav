@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {applyBrokerFills, liveIntents, trailOpenStops} from './live-grid.js';
+import {applyBrokerFills, liveIntents, manualBrokerExits, trailOpenStops} from './live-grid.js';
+
+test('a position squared off in the Sharekhan app is detected for the open level', () => {
+  const orders = [{level:1, side:'buy', entry:122.5, target:134.5, stop:102.5, status:'open', brokerOrderId:'212992039', scripCode:'51337'}];
+  const book = [
+    {orderId:'212997159', scripCode:'51338', side:'BUY', status:'Cancelled', quantity:'65', filled:'0'},
+    {orderId:'212999110', scripCode:'51337', side:'SELL', status:'Fully Executed', quantity:'65', filled:'65', price:0, execPrice:118.85},
+    {orderId:'212992039', scripCode:'51337', side:'BUY', status:'Fully Executed', quantity:'65', filled:'65', execPrice:122.5}
+  ];
+  const exits = manualBrokerExits(orders, book);
+  assert.equal(exits.length, 1);
+  assert.equal(exits[0].price, 118.85);
+  assert.equal(manualBrokerExits(orders, book, new Set(['212999110'])).length, 0);
+});
 
 test('a higher buy level is not sent until the premium reaches it', () => {
   const orders = [

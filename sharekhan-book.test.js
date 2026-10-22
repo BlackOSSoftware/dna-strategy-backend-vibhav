@@ -12,6 +12,7 @@ test('day report and net position payloads become order book rows', () => {
     quantity: '65',
     filled: '65',
     price: 83.3,
+    execPrice: null,
     status: 'Fully Executed',
     reason: '',
     product: 'INVESTMENT',
@@ -28,6 +29,16 @@ test('day report and net position payloads become order book rows', () => {
   assert.equal(mapPosition(positions[0]).side, 'BUY');
   assert.equal(mapPosition(positions[0]).quantity, '65');
   assert.equal(mapPosition(positions[0]).pnl, 110.5);
+  const closed = mapPosition({buyQty:65, sellQty:-65, netQty:0, buyRate:'122.50', sellRate:'118.85', bpl:'-237.25', avgPrice:'0', mktPrice:'0', scripCode:'51337', tradingSymbol:'NIFTY 27Oct2026 PE 22600', productType:'INVESTMENT', exchange:'NF'});
+  assert.equal(closed.net, 0);
+  assert.equal(closed.side, 'CLOSED');
+  assert.equal(closed.booked, -237.25);
+  assert.equal(closed.ltp, null);
+  assert.deepEqual(closed.option, {underlying:'NIFTY', expiry:'27OCT2026', optionType:'PE', strike:22600});
+  const open = mapPosition({buyQty:65, sellQty:0, netQty:65, buyRate:'122.50', sellRate:'0', bpl:'0', avgPrice:'0', tradingSymbol:'NIFTY 27Oct2026 PE 22600', scripCode:'51337'});
+  assert.equal(open.avg, 122.5);
+  assert.equal(open.side, 'BUY');
+  assert.equal(mapOrder({orderId:'212999110', buySell:'S', execQty:65, orderPrice:'0', execPrice:'118.85', orderStatus:'Fully Executed'}).execPrice, 118.85);
   const rejected = mapOrder({orderId:'210003475', orderStatus:'Exchange Rejected', errorMsg:'You have insufficient funds. You require Rs. 289.20 to place this order'});
   assert.equal(rejected.reason, 'You have insufficient funds. You require Rs. 289.20 to place this order');
 });

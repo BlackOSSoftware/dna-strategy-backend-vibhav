@@ -13,7 +13,7 @@ import {AngelData} from './angel.js';
 import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
 import {alignOrderContract, submitLiveOrder} from './sharekhan-orders.js';
-import {applyBrokerFills, liveIntents, trailOpenStops} from './live-grid.js';
+import {applyBrokerFills, liveIntents, manualBrokerExits, trailOpenStops} from './live-grid.js';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const stateFile=path.join(root,'data','state.json');
@@ -117,6 +117,8 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
     const rights=mode==='CE'?['CE']:mode==='PE'?['PE']:['CE','PE'];
     const display=[];
     for(const right of rights){
+      const held=await heldSide(right,gridSource);
+      if(held){display.push(held);continue;}
       try{
         const contract=await resolveOption({...selection,optionRight:right},direction,strikeSpot,market);
         let quote=null;
@@ -133,7 +135,8 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
   const sides=[];
   for(const item of plan){
     let contract;
-    const kept=engine.status==='running'&&engine.tradeMode!=='live'?(engine.sideContracts?.[item.right]||(engine.option?.optionType===item.right?engine.option:null)):null;
+    const heldOrders=activeOrdersFor(item.right);
+    const kept=heldOrders.length?contractFor(heldOrders[0]):engine.status==='running'&&engine.tradeMode!=='live'?(engine.sideContracts?.[item.right]||(engine.option?.optionType===item.right?engine.option:null)):null;
     try{contract=kept?.scripCode?kept:await resolveOption({...selection,optionRight:item.right},direction,strikeSpot,market);}
     catch(error){sides.push({optionType:item.right,side:item.side,label:'',grid:[],gridError:error.message,orders:[],gridSource});continue;}
     const own=gridSettingsFor(url,item.right);
@@ -162,6 +165,11 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
     board.orders=engine.orders().filter(order=>!order.parked&&(order.right||'CE')===item.right&&(!order.scripCode||!board.scripCode||String(order.scripCode)===String(board.scripCode)));
     sides.push(board);
   }
+  for(const right of ['CE','PE']){
+    if(plan.some(item=>item.right===right))continue;
+    const held=await heldSide(right,gridSource);
+    if(held)sides.push(held);
+  }
   engine.sideContracts={};
   for(const side of sides)if(side.scripCode)engine.sideContracts[side.optionType]=side;
   if(sides[0]?.scripCode)engine.option=sides[0];
@@ -185,7 +193,15 @@ async function optionBoard(url,maxAge=15000){
     const value=url.searchParams.get(key);
     if(value)previewConfig[key]=value;
   }
-  if(url.searchParams.get('tradeMode')!=='live'&&!(engine.tradeMode==='live'&&engine.status==='running')){
+  const heldCurrent=engine.status==='running'&&engine.tradeMode==='existing'&&engine.config.signalLock!==false&&engine.signal?.time&&engine.signal?.spot>0;
+  if(heldCurrent){
+    direction=engine.signal.side==='short'?'short':'buy';
+    previewSignal=engine.signal;
+    signalInfo={side:direction,spot:engine.signal.spot,time:engine.signal.time,interval:engine.config.signalInterval||'15minute'};
+    url.searchParams.set('spot',String(engine.signal.spot));
+    url.searchParams.set('direction',direction);
+  }
+  if(!heldCurrent&&url.searchParams.get('tradeMode')!=='live'&&!(engine.tradeMode==='live'&&engine.status==='running')){
     try{
       const market=await signalMarket();
       const session={after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()};
@@ -295,7 +311,10 @@ function setGridAnchor(data={}){
   return engine.snapshot();
 }
 function currentSignalRef(settings){
-  if(engine.tradeMode==='live'&&engine.status==='running')return engine.signal?.time?engine.signal:null;
+  if(engine.status==='running'){
+    if(engine.tradeMode==='live')return engine.signal?.time?engine.signal:null;
+    if(engine.config.signalLock!==false&&engine.signal?.time)return engine.signal;
+  }
   return settings?.previewSignal||null;
 }
 function manualAnchorFor(right,signalTime){
@@ -368,9 +387,26 @@ async function brokerBook(force=false){
   if(!accessToken){bookCache={at:0,value:null};return sharekhanBook({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:'',customerId:''});}
   if(!force&&bookCache.value&&Date.now()-bookCache.at<2000)return bookCache.value;
   const value=await sharekhanBook({apiKey:process.env.SHAREKHAN_API_KEY,accessToken,customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:broker.config.loginId||''});
+  await pricePositions(value);
   bookCache={at:Date.now(),value};
   await syncBookOrders(value);
   return value;
+}
+function positionContract(position){
+  const option=position?.option;
+  if(!option)return null;
+  return {exchange:position.exchange||'NF',tradingSymbol:option.underlying,symbol:option.underlying,scripCode:position.scripCode,strike:option.strike,optionType:option.optionType,expiry:option.expiry};
+}
+async function pricePositions(book){
+  for(const position of book?.positions||[]){
+    const booked=Number(position.booked)||0;
+    if(position.net&&!(position.ltp>0)&&angel.status().connected){
+      const contract=positionContract(position);
+      if(contract){try{position.ltp=(await angel.quote(contract)).price;}catch{}}
+    }
+    if(position.net&&position.ltp>0&&position.avg>0)position.pnl=Math.round((booked+(position.ltp-position.avg)*position.net)*100)/100;
+    else if(!position.net)position.pnl=booked;
+  }
 }
 async function syncBookOrders(book){
   const orders=engine.orders();
@@ -378,6 +414,14 @@ async function syncBookOrders(book){
   const stamp=()=>`${engine.orders().length}|`+engine.orders().map(order=>`${order.id}:${order.status}:${order.brokerOrderId||''}:${order.rejectReason||''}`).join('|');
   const before=stamp();
   applyBrokerFills(orders, book.orders, (order, price, reason)=>engine.closeOptionOrder(order, price, reason), {trustedBook:!!book.connected});
+  if(book.connected){
+    for(const {order,row,price} of manualBrokerExits(engine.orders(), book.orders, claimedExits)){
+      let exitPrice=price;
+      if(!(exitPrice>0)){try{exitPrice=(await angel.quote(contractFor(order))).price;}catch{exitPrice=order.filled||order.entry;}}
+      engine.closeOptionOrder(order, exitPrice, 'Closed in Sharekhan');
+      engine.log('risk',`Level ${order.level} ${order.right||''} was squared off outside GridPilot (Sharekhan #${row.orderId}) at ${exitPrice}`);
+    }
+  }
   for(const order of [...engine.orders()]){
     if(order.staleCleared){
       order.staleCleared=false;
@@ -392,14 +436,45 @@ async function syncBookOrders(book){
   if(stamp()!==before)await save();
 }
 let liveBusy=false, liveAt=0, signalAt=0, lockFreeSince=null, boardDirty=false;
+const claimedExits=new Set();
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
   const tradeMode=data.tradeMode==='live'?'live':'existing';
   if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
   if(mode==='live'&&!angel.status().connected)throw Error('Connect Angel One before starting live trading');
-  const contract=tradeMode==='live'?null:(engine.option?.scripCode?engine.option:await resolveOption(engine.config,data.direction,data.spot));
+  let startSignal=null;
+  if(tradeMode==='existing'){
+    try{
+      const market=await signalMarket();
+      startSignal=signalSequence(market.candles||[],{after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()}).filter(item=>item?.spot>0).at(-1)||null;
+    }catch{}
+  }
+  const direction=startSignal?(startSignal.side==='short'?'short':'buy'):data.direction;
+  const hadActive=engine.orders().some(isActiveOrder);
+  const contract=tradeMode==='live'?null:(engine.option?.scripCode?engine.option:await resolveOption(engine.config,direction,data.spot));
   lockFreeSince=null;signalAt=0;
-  return fresh?engine.start(data.direction,mode,contract,tradeMode):engine.arm(data.direction,mode,contract,tradeMode);
+  const result=fresh?engine.start(direction,mode,contract,tradeMode):engine.arm(direction,mode,contract,tradeMode);
+  if(tradeMode==='existing'&&startSignal&&!hadActive&&engine.status==='running'){
+    engine.signal={...startSignal,side:direction};
+    boardDirty=true;
+    engine.log('signal',`Current signal held for this run: ${direction==='short'?'SELL':'BUY'} ${startSignal.spot}`);
+    return engine.snapshot();
+  }
+  return result;
+}
+function isActiveOrder(order){
+  return !order.parked&&(order.status==='open'||(order.status==='pending'&&order.brokerOrderId)||(order.exitBrokerOrderId&&order.status!=='closed'));
+}
+function activeOrdersFor(right){
+  return engine.orders().filter(order=>(order.right||'CE')===right&&isActiveOrder(order));
+}
+async function heldSide(right,gridSource){
+  const held=activeOrdersFor(right);
+  if(!held.length)return null;
+  const contract=contractFor(held[0]);
+  let quote=null;
+  try{quote=await optionQuote(contract);}catch{}
+  return {...contract,optionType:right,side:held[0].side==='short'?'short':'buy',manageOnly:true,price:quote?.price||null,anchor:null,gridSource,anchorSource:'held',grid:[],gridError:'Open trade from an earlier signal. Its stop, target and trailing keep running; no new levels are placed on this side.',orders:engine.orders().filter(order=>!order.parked&&(order.right||'CE')===right&&String(order.scripCode||'')===String(contract.scripCode||order.scripCode||''))};
 }
 async function refreshLiveSignal(){
   if(engine.tradeMode!=='live'||engine.status!=='running'||Date.now()-signalAt<20000)return;
@@ -437,7 +512,63 @@ async function refreshLiveSignal(){
 }
 function contractFor(order){
   const right=String(order?.right||'').toUpperCase();
+  const same=item=>item?.scripCode&&(!order?.scripCode||String(item.scripCode)===String(order.scripCode));
+  if(right&&same(engine.sideContracts?.[right]))return engine.sideContracts[right];
+  if(same(engine.option)&&(!right||engine.option.optionType===right))return engine.option;
+  if(order?.scripCode){
+    const name=order.tradingSymbol||optionUnderlying(engine.config.symbol||'NIFTY');
+    return {tradingSymbol:name,exchange:optionMarket(engine.config.exchange||'NF'),scripCode:String(order.scripCode),strike:order.strike,expiry:order.expiry,optionType:right||'CE',lotSize:order.lotSize||engine.option?.lotSize||0,label:`${name} ${order.strike||''} ${right||'CE'}`};
+  }
   return (right&&engine.sideContracts?.[right])||engine.option;
+}
+function marketablePrice(price,side,tick=0.05){
+  const step=Number(tick)>0?Number(tick):0.05;
+  const raw=side==='short'?price*0.99:price*1.01;
+  return Math.max(step,Math.round(Math.round(raw/step)*step*100)/100);
+}
+async function exitOpenOrder(data){
+  const right=String(data.right||'').toUpperCase();
+  const order=engine.orders().find(item=>item.status==='open'&&(item.id===Number(data.id)||item.level===Number(data.level))&&(!right||(item.right||'CE')===right));
+  if(!order)throw Error('Only an open (filled) level can be exited');
+  if(order.exitBrokerOrderId)throw Error('An exit order for this level is already with Sharekhan');
+  const contract=contractFor(order);
+  let ltp=null;
+  try{ltp=(await angel.quote(contract)).price;}catch{}
+  if(!(ltp>0))throw Error('Live option price is unavailable, so the exit was not sent');
+  if(!order.brokerOrderId){engine.closeOptionOrder(order,ltp,'Manual exit');return engine.snapshot();}
+  const side=order.side==='short'?'buy':'short';
+  const price=marketablePrice(ltp,side,contract?.tickSize);
+  const sent=await sendLive(contract,{side,entry:price,quantity:order.quantity});
+  order.exitBrokerOrderId=sent.orderId;
+  order.exitReason='manual';
+  engine.log('order',`Manual exit ${order.right||''} level ${order.level} at ${price} · ${sent.orderId}`);
+  return engine.snapshot();
+}
+async function closePosition(data){
+  if(!broker.accessToken())throw Error('Connect Sharekhan before closing a position');
+  const book=await brokerBook(true);
+  if(!book.connected)throw Error(book.error||'Sharekhan book is not available');
+  const position=(book.positions||[]).find(item=>String(item.scripCode)===String(data.scripCode||'')&&item.net);
+  if(!position)throw Error('This position is already closed');
+  const base=positionContract(position);
+  if(!base)throw Error('Only option positions can be closed from GridPilot');
+  const contract=await liveContract({...base,label:position.tradingSymbol});
+  const lot=Number(contract.lotSize);
+  if(!(lot>0))throw Error('Lot size for this contract is unknown, so the order was not sent');
+  const lots=Math.abs(position.net)/lot;
+  if(!Number.isInteger(lots))throw Error('Position quantity is not a whole number of lots, so the order was not sent');
+  let ltp=position.ltp;
+  if(!(ltp>0)){try{ltp=(await angel.quote(base)).price;}catch{}}
+  if(!(ltp>0))throw Error('Live option price is unavailable, so the order was not sent');
+  const side=position.net>0?'short':'buy';
+  const price=marketablePrice(ltp,side,contract.tickSize);
+  const sent=await sendLive(contract,{side,entry:price,quantity:lots});
+  for(const order of engine.orders()){
+    if(order.status==='open'&&!order.exitBrokerOrderId&&String(order.scripCode||'')===String(position.scripCode)){order.exitBrokerOrderId=sent.orderId;order.exitReason='manual';}
+  }
+  engine.log('order',`Square off ${position.tradingSymbol} · ${Math.abs(position.net)} qty at ${price} · ${sent.orderId}`);
+  await save();
+  return {ok:true,orderId:sent.orderId,price,quantity:Math.abs(position.net)};
 }
 async function liveContract(contract){
   if(!contract?.scripCode)return contract;
@@ -575,6 +706,7 @@ async function executeLiveGrid(board){
       const contract=engine.sideContracts?.[right]||side;
       trailOpenStops(orders, side.price, {side:sideName, trailStartLeg:side.trailStartLeg||engine.config.trailStartLeg, trailStep:side.trailStep||engine.config.trailStep, tick:side.tickSize||engine.config.tickSize});
       for(const intent of liveIntents(orders, side.price, sideName)){
+        if(side.manageOnly&&intent.type==='entry')continue;
         const order=orders.find(item=>item.level===intent.level);
         if(!order)continue;
         try{
@@ -619,6 +751,7 @@ async function squareLivePositions(){
   }
 }
 async function liveOptionOrder(data){
+  if(data.action==='exit')return exitOpenOrder(data);
   if(data.action==='unplace'){
     const right=String(data.right||'').toUpperCase();
     const existing=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&(!right||(item.right||'CE')===right));
@@ -640,6 +773,7 @@ async function liveOptionOrder(data){
   try{await angel.quote(contract);}catch{/* Angel quote sirf price warm-up hai; Sharekhan order ke liye zaroori nahi */}
   const scoped=item=>(!right||(item.right||'CE')===right);
   const before=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&scoped(item));
+  if(before?.status==='open')throw Error('This level is already filled at Sharekhan. Use Exit to close it instead of sending it again.');
   const wasOpen=before?.status==='open';
   const previousStatus=before?.status||'draft';
   const previousFilled=before?.filled??null;
@@ -709,6 +843,7 @@ const server=http.createServer(async(req,res)=>{
           else await store.clearBrokerSession();
           bookCache={at:0,value:null};
           break;
+        case '/api/sharekhan/close-position':result=await closePosition(data);break;
         case '/api/sharekhan/logout':result=broker.logout();await store.clearBrokerSession();bookCache={at:0,value:null};break;
         case '/api/sharekhan/credentials':result=broker.updateCredentials(data);await store.saveSharekhanCredentials(broker.config);writeSharekhanEnv(broker.config);await store.clearBrokerSession();bookCache={at:0,value:null};break;
         case '/api/config': result=engine.configure(await assertInstrument(data));break;
