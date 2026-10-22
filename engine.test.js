@@ -224,6 +224,20 @@ test('rejected broker orders do not block a next-signal start',()=>{
   t.optionOrders=[{level:1,side:'buy',status:'pending',brokerOrderId:'X2',entry:100}];
   assert.throws(()=>t.start('buy','paper',null,'live'),/Close the current option orders/);
 });
+test('starting a paused next-signal run waits for a fresh signal instead of resuming the old one',()=>{
+  const s=new Strategy();
+  s.start('buy','live',null,'live');
+  s.signal={side:'buy',spot:22639.25,time:1792650000};
+  s.optionOrders=[{level:1,side:'buy',status:'rejected',brokerOrderId:'212941683',entry:151.25}];
+  s.startedAt=1000;
+  s.stop();
+  const before=Date.now();
+  const snap=s.start('buy','live',null,'live');
+  assert.equal(snap.status,'running');
+  assert.equal(snap.signal,null);
+  assert.deepEqual(snap.optionOrders,[]);
+  assert.ok(snap.startedAt>=before);
+});
 test('a running strategy cannot be started again',()=>{
   const s=new Strategy();
   s.start('buy','paper',null,'live');

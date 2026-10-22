@@ -327,24 +327,28 @@ async function syncBookOrders(book){
   }
   if(stamp()!==before)await save();
 }
-let liveBusy=false, liveAt=0, signalAt=0;
+let liveBusy=false, liveAt=0, signalAt=0, lockFreeSince=null;
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
   const tradeMode=data.tradeMode==='live'?'live':'existing';
   if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
   if(mode==='live'&&!angel.status().connected)throw Error('Connect Angel One before starting live trading');
   const contract=tradeMode==='live'?null:(engine.option?.scripCode?engine.option:await resolveOption(engine.config,data.direction,data.spot));
+  lockFreeSince=null;signalAt=0;
   return fresh?engine.start(data.direction,mode,contract,tradeMode):engine.arm(data.direction,mode,contract,tradeMode);
 }
 async function refreshLiveSignal(){
   if(engine.tradeMode!=='live'||engine.status!=='running'||Date.now()-signalAt<20000)return;
   signalAt=Date.now();
   const follow=engine.config.signalLock===false;
-  if(!follow&&engine.orders().some(order=>order.brokerOrderId||order.status==='open'))return;
+  const active=engine.orders().some(order=>order.status==='open'||(order.status==='pending'&&order.brokerOrderId));
+  if(!follow&&active){lockFreeSince=null;return;}
+  if(!follow&&!lockFreeSince)lockFreeSince=engine.signal?.time?Date.now():(engine.startedAt||Date.now());
   try{
     const market=await signalMarket();
     const sequence=signalSequence(market.candles||[],{after:engine.startedAt||Date.now(),strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()});
-    const found=follow?sequence.at(-1):sequence[0];
+    const frameSec=signalMinutes()*60;
+    const found=follow?sequence.at(-1):sequence.find(item=>item.time>(engine.signal?.time||0)&&(item.time+frameSec)*1000>=lockFreeSince);
     if(!found||engine.signal?.time===found.time)return;
     const side=found.side==='short'?'short':'buy';
     if(follow&&engine.signal?.time){
@@ -356,10 +360,12 @@ async function refreshLiveSignal(){
       engine.option=null;
       engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · unlock mode: working grid naye signal par shift ho gaya; purana trade broker par chhod diya gaya hai`);
     }else{
-      if(!engine.orders().some(order=>order.brokerOrderId||order.status==='open'||order.status==='pending'))engine.direction=side;
+      if(active)return;
+      engine.direction=side;
       engine.signal={...found,side};
       engine.option=null;
       engine.optionOrders=[];
+      lockFreeSince=null;
       engine.log('signal',`${String(found.side).toUpperCase()} signal ${found.spot} · strike will be selected from this price`);
     }
     await save();
