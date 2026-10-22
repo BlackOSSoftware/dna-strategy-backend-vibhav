@@ -142,11 +142,21 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
     let quote=null;
     try{quote=await optionQuote(contract);}catch(error){quote={error};}
     let board;
+    const signalRef=currentSignalRef(settings);
+    const manual=manualAnchorFor(item.right,signalRef?.time);
     try{
       if(quote?.error)throw quote.error;
+      if(manual){sideSettings.anchor=manual;sideSettings.anchorSource='manual';}
+      else if(gridSource==='signal'){
+        const found=await signalOptionAnchor(contract,direction,settings.previewSignal);
+        if(found.error)throw Error(found.error);
+        sideSettings.anchor=found.price;sideSettings.signalTime=found.time;sideSettings.anchorSource='signal';
+      }
       board=await withOptionGrid(contract,{...sideSettings,quote});
     }catch(error){board={...contract,side:item.side,price:quote?.price||null,anchor:null,gridSource,signalTime:null,grid:[],gridError:error.message};}
     board.side=item.side;
+    board.anchorSource=sideSettings.anchorSource||'premium';
+    board.anchorSignalTime=signalRef?.time||null;
     rememberSideGrid(board,sideSettings);
     if(board.grid?.length)applyGridAnchor(board);
     board.orders=engine.orders().filter(order=>!order.parked&&(order.right||'CE')===item.right&&(!order.scripCode||!board.scripCode||String(order.scripCode)===String(board.scripCode)));
@@ -160,7 +170,7 @@ async function boardForPlan(url,direction,settings,plan,previewConfig={}){
 }
 async function optionBoard(url,maxAge=15000){
   let direction=url.searchParams.get('direction')||engine.direction||'buy';
-  let signalInfo=null;
+  let signalInfo=null,previewSignal=null;
   if(engine.tradeMode==='live'&&engine.status==='running'&&!(engine.signal?.spot>0)){
     return {label:'Waiting for next signal',side:direction==='short'?'short':'buy',price:null,grid:[],orders:[],gridError:'Upcoming signal has not formed yet. The new trade is placed when it does.',sides:[]};
   }
@@ -182,6 +192,7 @@ async function optionBoard(url,maxAge=15000){
       const sequence=signalSequence(market.candles||[],session).filter(item=>item?.spot>0);
       const signal=sequence.at(-1);
       if(signal?.spot>0){
+        previewSignal=signal;
         direction=signal.side;
         signalInfo={side:signal.side,spot:signal.spot,time:signal.time,interval:engine.config.signalInterval||'15minute'};
         url.searchParams.set('spot',String(signal.spot));
@@ -191,6 +202,7 @@ async function optionBoard(url,maxAge=15000){
   }
   const settings=gridSettings(url,direction);
   settings.maxAge=maxAge;
+  settings.previewSignal=previewSignal;
   const plan=sideActions(previewConfig,direction);
   if(Array.isArray(plan)){const planned=await boardForPlan(url,direction,settings,plan,previewConfig);if(signalInfo)planned.signalInfo=signalInfo;return planned;}
   let contract;
@@ -215,17 +227,23 @@ async function optionBoard(url,maxAge=15000){
   let quote=null;
   try{quote=await optionQuote(contract);}catch(error){quote={error};}
   let board;
+  const signalRef=currentSignalRef(settings);
+  const manual=manualAnchorFor(contract?.optionType==='PE'?'PE':'CE',signalRef?.time);
   try{
     if(quote?.error)throw quote.error;
-    if(gridSource==='signal'){
-      const found=await signalOptionAnchor(contract,direction);
+    if(manual){settings.anchor=manual;settings.anchorSource='manual';}
+    else if(gridSource==='signal'){
+      const found=await signalOptionAnchor(contract,direction,settings.previewSignal);
       if(found.error)throw Error(found.error);
       settings.anchor=found.price;
       settings.signalTime=found.time;
+      settings.anchorSource='signal';
     }
     board=rememberSideGrid(await withOptionGrid(contract,{...settings,quote}),settings);
   }
   catch(error){board=rememberSideGrid({...contract,side:settings.side,price:quote?.price||null,anchor:null,gridSource,signalTime:settings.signalTime||null,grid:[],gridError:error.message},settings);}
+  board.anchorSource=settings.anchorSource||'premium';
+  board.anchorSignalTime=signalRef?.time||null;
   const ordersBefore=JSON.stringify(engine.optionOrders||[]);
   if(board.grid?.length)applyGridAnchor(board);
   if(board.price)engine.markOptionPrice(board.price,board.optionType||contract?.optionType||'');
@@ -234,23 +252,62 @@ async function optionBoard(url,maxAge=15000){
   if(signalInfo)board.signalInfo=signalInfo;
   return board;
 }
-async function signalOptionAnchor(contract, direction){
+async function signalOptionAnchor(contract, direction, given=null){
   let signal=null;
   if(engine.tradeMode==='live'&&engine.status==='running')signal=engine.signal?.time?engine.signal:null;
+  else if(given?.time)signal=given;
   else{
     const market=await signalMarket();
     signal=sessionSignal(market.candles||[],{direction:direction==='short'?'short':'buy',after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()});
   }
   if(!signal?.time)return {error:engine.tradeMode==='live'&&engine.status==='running'?'Signal price waits for the next signal after the strategy starts.':'Signal price waits for today\'s confirmed signal.'};
-  const history=await marketCandles({...contract,angel,interval:engine.config.signalInterval||'15minute'});
-  const price=premiumAt(history.candles,signal.time);
+  let minute=Number(signal.time);
+  try{
+    const spot=await marketCandles({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode||'20000',symbol:engine.config.symbol||'NIFTY',angel,interval:'1minute'});
+    const end=minute+signalMinutes()*60;
+    const level=Number(signal.spot);
+    const hit=(spot.candles||[]).find(candle=>candle.time>=minute&&candle.time<end&&(signal.side==='short'?candle.low<level:candle.high>level));
+    if(hit)minute=hit.time;
+  }catch{}
+  const history=await marketCandles({...contract,angel,interval:'1minute'});
+  const exact=(history.candles||[]).find(candle=>candle.time===minute);
+  const price=exact?.close>0?Number(exact.close):premiumAt(history.candles,minute);
   if(!(price>0))return {error:'The option premium at the signal time is not in the chart yet.'};
-  return {price,time:signal.time};
+  return {price,time:minute};
+}
+function setGridAnchor(data={}){
+  const right=String(data.right||'CE').toUpperCase()==='PE'?'PE':'CE';
+  const busy=engine.orders().some(order=>(order.right||'CE')===right&&(order.status==='open'||order.status==='pending'||order.exitBrokerOrderId));
+  if(busy)throw Error(`${right} grid already has a placed order. Unplace or close it before changing the entry price.`);
+  const clear=data.price===''||data.price==null;
+  const price=clear?null:Math.round(Number(data.price)*100)/100;
+  if(!clear&&!(price>0))throw Error('Entry price must be greater than 0');
+  const signalTime=engine.tradeMode==='live'&&engine.status==='running'?(engine.signal?.time||null):(Number(data.signalTime)||null);
+  if(engine.tradeMode==='live'&&engine.status==='running'&&!signalTime)throw Error('Wait for the next signal before setting the entry price');
+  const anchors={...(engine.manualAnchors||{})};
+  if(clear)delete anchors[right];
+  else anchors[right]={price,signalTime};
+  engine.manualAnchors=anchors;
+  engine.optionOrders=engine.orders().filter(order=>(order.right||'CE')!==right);
+  engine.gridKeys={...(engine.gridKeys||{}),[right]:''};
+  boardDirty=true;
+  engine.log('order',clear?`${right} grid entry is automatic again`:`${right} grid entry set manually to ${price}; all levels follow it`);
+  return engine.snapshot();
+}
+function currentSignalRef(settings){
+  if(engine.tradeMode==='live'&&engine.status==='running')return engine.signal?.time?engine.signal:null;
+  return settings?.previewSignal||null;
+}
+function manualAnchorFor(right,signalTime){
+  const manual=engine.manualAnchors?.[right];
+  if(!(Number(manual?.price)>0))return null;
+  if((Number(manual.signalTime)||null)!==(Number(signalTime)||null))return null;
+  return Number(manual.price);
 }
 function applyGridAnchor(board){
   const source=board.gridSource==='signal'?'signal':'premium';
   const slot=board.optionType||'CE';
-  const key=source==='signal'?`signal:${board.scripCode||''}:${board.anchor||''}`:`premium:${board.scripCode||''}`;
+  const key=board.anchorSource==='manual'?`manual:${board.scripCode||''}:${board.anchor||''}`:source==='signal'?`signal:${board.scripCode||''}:${board.anchor||''}`:`premium:${board.scripCode||''}`;
   const slotOrders=()=>engine.orders().filter(order=>(order.right||'CE')===slot);
   const dead=order=>['rejected','cancelled','canceled','closed'].includes(String(order.status||'').toLowerCase());
   const active=order=>order.status==='open'||order.status==='pending'||(order.exitBrokerOrderId&&order.status!=='closed');
@@ -261,7 +318,7 @@ function applyGridAnchor(board){
     try{
       const side=board.side==='short'?'short':'buy';
       const kept=engine.orders().filter(order=>(order.right||'CE')!==slot);
-      const next=board.grid.map(row=>engine.draftOrder({...row,side,quantity:board.orderQuantity||engine.config.quantity,right:slot,scripCode:board.scripCode,strike:board.strike,expiry:board.expiry,tradingSymbol:board.tradingSymbol}));
+      const next=board.grid.map(row=>engine.draftOrder({...row,side,quantity:board.orderQuantity||engine.config.quantity,right:slot,scripCode:board.scripCode,strike:board.strike,expiry:board.expiry,tradingSymbol:board.tradingSymbol,lotSize:board.lotSize}));
       engine.optionOrders=[...kept,...next];
       engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
     }catch(error){board.gridError=error.message;}
@@ -270,8 +327,8 @@ function applyGridAnchor(board){
   const idle=!running&&!slotOrders().some(active);
   if(idle&&slotOrders().some(dead))return install();
   const firstLevel=slotOrders().find(order=>order.level===1);
-  if(idle&&source==='signal'&&firstLevel&&Number(firstLevel.entry)!==Number(board.grid[0]?.entry))return install();
-  if(source==='signal'&&!slotOrders().length)return install();
+  if(idle&&(source==='signal'||board.anchorSource==='manual')&&firstLevel&&Number(firstLevel.entry)!==Number(board.grid[0]?.entry))return install();
+  if(!slotOrders().length)return install();
   if(!locked&&previous&&previous!==key)return install();
   if(locked&&previous&&previous!==key)board.gridHeld=true;
   if(!previous)engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
@@ -334,7 +391,7 @@ async function syncBookOrders(book){
   }
   if(stamp()!==before)await save();
 }
-let liveBusy=false, liveAt=0, signalAt=0, lockFreeSince=null;
+let liveBusy=false, liveAt=0, signalAt=0, lockFreeSince=null, boardDirty=false;
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
   const tradeMode=data.tradeMode==='live'?'live':'existing';
@@ -656,6 +713,7 @@ const server=http.createServer(async(req,res)=>{
         case '/api/sharekhan/credentials':result=broker.updateCredentials(data);await store.saveSharekhanCredentials(broker.config);writeSharekhanEnv(broker.config);await store.clearBrokerSession();bookCache={at:0,value:null};break;
         case '/api/config': result=engine.configure(await assertInstrument(data));break;
         case '/api/signal-lock': engine.config.signalLock=data.locked!==false; engine.log('settings',engine.config.signalLock?'Signal lock ON: chal raha trade hi chalega':'Signal lock OFF: naya signal aate hi grid shift hoga'); result=engine.snapshot(); break;
+        case '/api/grid-anchor': result=setGridAnchor(data); break;
         case '/api/arm': result=await startStrategy(data,false);break;
         case '/api/start': result=await startStrategy(data,true);break;
         case '/api/stop': result=engine.stop();break;
@@ -715,7 +773,8 @@ async function start(){
       url.searchParams.set('right',engine.config.optionRight||'AUTO');
       const chartLtp=engine.config.scripCode?(await angel.quote({exchange:engine.config.exchange||'NC',scripCode:engine.config.scripCode,symbol:engine.config.symbol||'NIFTY'})).price:null;
       const optionLtp=engine.option?.scripCode?(await angel.quote(engine.option)).price:null;
-      if(!boardCache||Date.now()-boardAt>10000||!optionLtp){
+      if(!boardCache||boardDirty||Date.now()-boardAt>10000||!optionLtp){
+        boardDirty=false;
         await refreshLiveSignal();
         url.searchParams.set('direction',engine.direction||'buy');
         if(engine.tradeMode==='live'&&engine.signal?.spot>0)url.searchParams.set('spot',String(engine.signal.spot));
@@ -737,7 +796,7 @@ async function start(){
       if(engine.mode==='live')await executeLiveGrid(liveBoard);
       if(!price && !chartLtp && !Object.keys(prices).length)return {error:board?.gridError||'Waiting for the option price',run};
       const orders=sideList.length?sideList.flatMap(side=>(side.orders||[]).map(order=>({...order,right:order.right||side.optionType}))):(board.orders||[]);
-      return {nifty:chartLtp||board.nifty,price,prices,right:engine.option?.optionType||board.optionType||'',bid:board.bid,ask:board.ask,label:board.label,side:board.side,run,orders:orders.map(order=>({level:order.level,right:order.right||'',status:order.status,entry:order.entry,stop:order.stop}))};
+      return {nifty:chartLtp||board.nifty,price,prices,right:engine.option?.optionType||board.optionType||'',bid:board.bid,ask:board.ask,label:board.label,side:board.side,run,orders:orders.map(order=>({id:order.id,level:order.level,right:order.right||'',status:order.status,entry:order.entry,stop:order.stop}))};
     }});
   });
 }

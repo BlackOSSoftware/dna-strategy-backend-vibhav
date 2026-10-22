@@ -107,7 +107,7 @@ export class Strategy {
     this.events = []; this.realized = 0; this.lastPrice = null; this.level = 0;
     this.highWater = null; this.lowWater = null; this.sharedStop = null;
     this.haltReason = null; this.nextId = 1; this.firstEntry = null; this.trailAnchor = null; this.option = null;
-    this.optionOrders = []; this.optionPrice = null; this.sideContracts = {}; this.gridKeys = {};
+    this.optionOrders = []; this.optionPrice = null; this.sideContracts = {}; this.gridKeys = {}; this.manualAnchors = {};
   }
   log(type, message, data = {}) { this.events.unshift({id:this.nextId++, time:new Date().toISOString(), type, message, ...data}); this.events.length = Math.min(this.events.length, 200); }
   configure(input) {
@@ -185,7 +185,7 @@ export class Strategy {
     if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
     if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade && nextTrade !== 'live') { this.mode = mode; return this.resume(); }
     if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
-      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice};
+      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}};
       if (nextTrade === 'existing') { keep.option = contract || this.option; keep.optionOrders = this.optionOrders; }
       this.reset();
       Object.assign(this, keep);
@@ -479,5 +479,5 @@ export class Strategy {
   }
   snapshot() { return {config:this.config,signalFrame:this.config.signalInterval||'15minute',direction:this.direction,status:this.status,mode:this.mode,tradeMode:this.tradeMode||'existing',signal:this.signal||null,startedAt:this.startedAt||null,day:this.day,
     candles:this.candles,pending:this.pending,legs:this.legs,history:this.history,events:this.events,
-    realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice,gridKey:this.gridKey||''}; }
+    realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice,gridKey:this.gridKey||'',manualAnchors:this.manualAnchors||{}}; }
 }
