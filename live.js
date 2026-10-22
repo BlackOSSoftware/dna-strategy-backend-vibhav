@@ -1,6 +1,6 @@
 import {WebSocketServer} from 'ws';
 
-export function attachLive(server, {nextTick, intervalMs = 1000, authorize, shouldTick}) {
+export function attachLive(server, {nextTick, intervalMs = 1000, idleIntervalMs = 0, authorize, shouldTick}) {
   const sockets = new Set();
   let latest = null;
   const wss = new WebSocketServer({
@@ -26,11 +26,18 @@ export function attachLive(server, {nextTick, intervalMs = 1000, authorize, shou
   });
   let busy = false;
   let signature = '';
+  let lastRunAt = 0;
   const run = async () => {
     if (busy) return;
-    if (!sockets.size && shouldTick && !shouldTick()) return;
+    const active = !shouldTick || shouldTick();
+    if (!active) {
+      if (!sockets.size) return;
+      const idle = typeof idleIntervalMs === 'function' ? idleIntervalMs() : idleIntervalMs;
+      if (idle > 0 && Date.now() - lastRunAt < idle) return;
+    }
     busy = true;
     const started = Date.now();
+    lastRunAt = started;
     try {
       const tick = await nextTick();
       if (tick) {

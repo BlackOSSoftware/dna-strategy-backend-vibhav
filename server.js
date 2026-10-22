@@ -695,7 +695,7 @@ async function start(){
     console.log(`Grid API: http://${host}:${port} · MongoDB ${store.dbName}`);
     warmInstrumentCache();
     let boardCache=null,boardAt=0;
-    attachLive(server,{intervalMs:1000,authorize:token=>!!verifyToken(token),shouldTick:()=>engine.status==='running'&&(engine.mode==='live'||engine.tradeMode==='live'),nextTick:async()=>{
+    attachLive(server,{intervalMs:1000,idleIntervalMs:()=>angel.feed?.healthy()?1000:10000,authorize:token=>!!verifyToken(token),shouldTick:()=>engine.status==='running'&&(engine.mode==='live'||engine.tradeMode==='live'),nextTick:async()=>{
       const url=new URL('http://127.0.0.1/api/option');
       url.searchParams.set('moneyness',engine.config.optionMoneyness||'ATM');
       url.searchParams.set('depth',String(engine.config.optionDepth||1));
