@@ -269,7 +269,7 @@ async function signalOptionAnchor(contract, direction, given=null){
     const hit=(spot.candles||[]).find(candle=>candle.time>=minute&&candle.time<end&&(signal.side==='short'?candle.low<level:candle.high>level));
     if(hit)minute=hit.time;
   }catch{}
-  const history=await marketCandles({...contract,angel,interval:'1minute'});
+  const history=await marketCandles({...contract,symbol:contract?.tradingSymbol||contract?.symbol||'',angel,interval:'1minute'});
   const exact=(history.candles||[]).find(candle=>candle.time===minute);
   const price=exact?.close>0?Number(exact.close):premiumAt(history.candles,minute);
   if(!(price>0))return {error:'The option premium at the signal time is not in the chart yet.'};
