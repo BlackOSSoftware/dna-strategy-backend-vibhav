@@ -712,10 +712,19 @@ async function start(){
       }
       const board=boardCache;
       const price=optionLtp||board.price;
+      const sideList=board?.sides?.length?board.sides:[];
+      const prices={};
+      for(const side of sideList){
+        if(!side?.scripCode)continue;
+        try{prices[side.optionType||'CE']=(await angel.quote(side)).price;}catch{if(side.price>0)prices[side.optionType||'CE']=side.price;}
+      }
+      if(engine.option?.optionType&&optionLtp&&prices[engine.option.optionType]==null)prices[engine.option.optionType]=optionLtp;
+      const liveBoard=sideList.length?{...board,price,sides:sideList.map(side=>({...side,price:prices[side.optionType||'CE']||side.price}))}:{...board,price};
       const run={status:engine.status,tradeMode:engine.tradeMode,direction:engine.direction,signal:engine.signal||null};
-      if(engine.mode==='live')await executeLiveGrid({...board,price});
-      if(!price && !chartLtp)return {error:board?.gridError||'Waiting for the option price',run};
-      return {nifty:chartLtp||board.nifty,price,bid:board.bid,ask:board.ask,label:board.label,side:board.side,run,orders:(board.orders||[]).map(order=>({level:order.level,status:order.status,entry:order.entry}))};
+      if(engine.mode==='live')await executeLiveGrid(liveBoard);
+      if(!price && !chartLtp && !Object.keys(prices).length)return {error:board?.gridError||'Waiting for the option price',run};
+      const orders=sideList.length?sideList.flatMap(side=>(side.orders||[]).map(order=>({...order,right:order.right||side.optionType}))):(board.orders||[]);
+      return {nifty:chartLtp||board.nifty,price,prices,right:engine.option?.optionType||board.optionType||'',bid:board.bid,ask:board.ask,label:board.label,side:board.side,run,orders:orders.map(order=>({level:order.level,right:order.right||'',status:order.status,entry:order.entry,stop:order.stop}))};
     }});
   });
 }
