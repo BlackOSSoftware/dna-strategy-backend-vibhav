@@ -252,7 +252,10 @@ function applyGridAnchor(board){
   const slot=board.optionType||'CE';
   const key=source==='signal'?`signal:${board.scripCode||''}:${board.anchor||''}`:`premium:${board.scripCode||''}`;
   const slotOrders=()=>engine.orders().filter(order=>(order.right||'CE')===slot);
-  const locked=slotOrders().some(order=>order.brokerOrderId||order.exitBrokerOrderId||order.status==='open'||order.status==='pending'||order.status==='rejected');
+  const dead=order=>['rejected','cancelled','canceled','closed'].includes(String(order.status||'').toLowerCase());
+  const active=order=>order.status==='open'||order.status==='pending'||(order.exitBrokerOrderId&&order.status!=='closed');
+  const running=engine.status==='running';
+  const locked=slotOrders().some(order=>active(order)||(running&&(order.brokerOrderId||dead(order))));
   if(!board.grid?.length)return;
   const install=()=>{
     try{
@@ -264,6 +267,7 @@ function applyGridAnchor(board){
     }catch(error){board.gridError=error.message;}
   };
   const previous=engine.gridKeys?.[slot]||'';
+  if(!running&&slotOrders().length&&slotOrders().every(dead))return install();
   if(source==='signal'&&!slotOrders().length)return install();
   if(!locked&&previous&&previous!==key)return install();
   if(locked&&previous&&previous!==key)board.gridHeld=true;

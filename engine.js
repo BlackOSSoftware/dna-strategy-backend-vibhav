@@ -180,6 +180,7 @@ export class Strategy {
       throw Error('Strategy is already running; stop it before starting again');
     }
     const dead = new Set(['rejected', 'cancelled', 'canceled']);
+    if (this.orders().length && this.orders().every(order => dead.has(String(order.status || '').toLowerCase()) || order.status === 'closed')) this.optionOrders = [];
     const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !dead.has(String(order.status || '').toLowerCase())));
     if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
     if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade && nextTrade !== 'live') { this.mode = mode; return this.resume(); }

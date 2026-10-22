@@ -238,6 +238,18 @@ test('starting a paused next-signal run waits for a fresh signal instead of resu
   assert.deepEqual(snap.optionOrders,[]);
   assert.ok(snap.startedAt>=before);
 });
+test('starting the current signal drops a finished or rejected old grid',()=>{
+  const s=new Strategy();
+  s.optionOrders=[{level:1,side:'buy',status:'rejected',brokerOrderId:'212941683',entry:151.25},{level:2,side:'buy',status:'draft',entry:158.25}];
+  s.optionOrders[1].status='closed';
+  const snap=s.start('buy','live',{scripCode:'1',label:'NIFTY 22650 CE'},'existing');
+  assert.equal(snap.status,'running');
+  assert.deepEqual(snap.optionOrders,[]);
+  const t=new Strategy();
+  t.optionOrders=[{level:1,side:'buy',status:'closed',reason:'target',brokerOrderId:'1',entry:100},{level:2,side:'buy',status:'open',brokerOrderId:'2',entry:107}];
+  const kept=t.start('buy','paper',{scripCode:'1'},'existing');
+  assert.equal(kept.optionOrders.length,2);
+});
 test('a running strategy cannot be started again',()=>{
   const s=new Strategy();
   s.start('buy','paper',null,'live');
