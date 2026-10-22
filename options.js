@@ -139,7 +139,7 @@ export function optionGridRows({price, anchor = null, side = 'buy', gridStep, ta
       stop:shared ? anchorPrice : moneyRound(entry - sign * stop, tick),
       shared,
       trailPoints:shared ? trail : stop,
-      trailText:shared ? `Trail ${trail} pts` : `${stop} pt stop`,
+      trailText:shared ? `Trail ${trail} pts` : `${stop} pt stop · trails ${trail}`,
       distance:moneyRound(entry - premium, tick)
     };
     if (!(row.entry > 0) || !(row.target > 0) || !(row.stop > 0)) break;

@@ -75,6 +75,17 @@ test('option pnl is in rupees using the contract lot size',()=>{
   assert.equal(s.optionOrders[0].pnl,1300);
   assert.equal(s.realized,1300);
 });
+test('paper option trades trail the stop from the first level',()=>{
+  const s=new Strategy({quantity:1,trailStep:8,trailStartLeg:3,maxLoss:1e9,maxProfit:1e9});
+  s.optionOrder({action:'place',level:1,rows:[{level:1,side:'buy',entry:100,target:150,stop:80,quantity:1,right:'CE'}]});
+  s.markOptionPrice(100,'CE');
+  assert.equal(s.optionOrders[0].status,'open');
+  s.markOptionPrice(117,'CE');
+  assert.equal(s.optionOrders[0].stop,96);
+  s.markOptionPrice(96,'CE');
+  assert.equal(s.optionOrders[0].status,'closed');
+  assert.equal(s.optionOrders[0].reason,'Stop');
+});
 test('daily loss cap closes open option trades and kills the run',()=>{
   const s=new Strategy({quantity:1,maxLoss:500,maxProfit:100000});
   s.status='running';

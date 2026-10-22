@@ -30,6 +30,31 @@ test('an open live buy exits on the stop or target and trails after the third fi
   assert.equal(liveIntents([{...orders[0], stop:80}], 112)[0].reason, 'target');
 });
 
+test('a single filled level trails its stop step by step until it exits', () => {
+  const orders = [
+    {level:1, side:'buy', entry:100, target:130, stop:80, status:'open', brokerOrderId:'1'},
+    {level:2, side:'buy', entry:107, target:119, stop:87, status:'rejected', brokerOrderId:'2'}
+  ];
+  trailOpenStops(orders, 105, {trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 80);
+  trailOpenStops(orders, 108, {trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 88);
+  trailOpenStops(orders, 125, {trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 104);
+  trailOpenStops(orders, 110, {trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 104);
+  assert.equal(orders[1].stop, 87);
+  assert.deepEqual(liveIntents(orders, 104).map(item => [item.level, item.reason]), [[1, 'stop']]);
+});
+
+test('a short level trails its stop downward', () => {
+  const orders = [{level:1, side:'short', entry:100, target:70, stop:120, status:'open', brokerOrderId:'1'}];
+  trailOpenStops(orders, 84, {side:'short', trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 104);
+  trailOpenStops(orders, 95, {side:'short', trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 104);
+});
+
 test('an exchange rejection stays rejected and is not sent again', () => {
   const orders = [{level:1, side:'buy', entry:43.9, target:55.9, stop:23.9, status:'pending', brokerOrderId:'210003475'}];
   applyBrokerFills(orders, [{orderId:'210003475', status:'Exchange Rejected', reason:'You have insufficient funds. You require Rs. 289.20 to place this order'}]);

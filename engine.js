@@ -1,4 +1,5 @@
 import {sideGridField, sideGridKeys, sideGridSettings} from './options.js';
+import {trailOpenStops} from './live-grid.js';
 
 export const defaults = Object.freeze({
   symbol: 'DEMO', exchange: 'NC', scripCode: '', productType: 'INVESTMENT',
@@ -418,12 +419,19 @@ export class Strategy {
     }
     for (const list of groups.values()) list.forEach((order, index) => { order.level = index + 1; });
   }
-  markOptionPrice(price) {
+  markOptionPrice(price, right = '') {
     const next = Number(price);
     if (!Number.isFinite(next) || next <= 0) return this.snapshot();
     this.optionPrice = fmt(next);
+    const slot = String(right || '').toUpperCase();
+    const mine = order => order.routing !== 'live' && (!slot || !order.right || order.right === slot);
+    const paperOpen = this.orders().filter(order => mine(order) && order.status === 'open');
+    if (paperOpen.length) {
+      const grid = sideGridSettings(this.config, slot || paperOpen[0].right || 'CE');
+      trailOpenStops(paperOpen, next, {side:paperOpen[0].side === 'short' ? 'short' : 'buy', trailStartLeg:grid.trailStartLeg || this.config.trailStartLeg, trailStep:grid.trailStep || this.config.trailStep, tick:grid.tickSize || this.config.tickSize});
+    }
     for (const order of this.orders()) {
-      if (order.routing === 'live') continue;
+      if (!mine(order)) continue;
       if (order.status === 'pending') {
         const reached = order.side === 'buy' ? next >= order.entry : next <= order.entry;
         if (reached) { order.status = 'open'; order.filled = fmt(next); this.log('fill', `Option level ${order.level} filled at ${order.filled}`); }

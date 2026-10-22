@@ -7,10 +7,20 @@ const round = (value, tick = 0.05) => {
 
 export function trailOpenStops(orders, price, {side = 'buy', trailStartLeg = 3, trailStep = 8, tick = 0.05} = {}) {
   const open = orders.filter(order => order.status === 'open' && !order.parked);
+  if (!open.length || !(price > 0) || !(trailStep > 0)) return;
+  const sign = side === 'short' ? -1 : 1;
+  for (const order of open) {
+    if (!(order.entry > 0) || !(order.stop > 0)) continue;
+    if (order.baseStop == null) order.baseStop = order.stop;
+    const steps = Math.floor((sign * (price - order.entry)) / trailStep);
+    if (steps <= 0) continue;
+    const trailed = round(order.baseStop + sign * steps * trailStep, tick);
+    if (sign === 1 && trailed > order.stop) order.stop = trailed;
+    if (sign === -1 && trailed < order.stop) order.stop = trailed;
+  }
   if (open.length < trailStartLeg) return;
   const first = orders.slice().sort((a, b) => a.level - b.level)[0];
-  if (!first || !(price > 0)) return;
-  const sign = side === 'short' ? -1 : 1;
+  if (!first) return;
   if (first.trailAnchor == null) first.trailAnchor = price;
   const steps = Math.floor((sign * (price - first.trailAnchor)) / trailStep);
   const breakeven = first.entry;

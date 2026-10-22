@@ -228,7 +228,7 @@ async function optionBoard(url,maxAge=15000){
   catch(error){board=rememberSideGrid({...contract,side:settings.side,price:quote?.price||null,anchor:null,gridSource,signalTime:settings.signalTime||null,grid:[],gridError:error.message},settings);}
   const ordersBefore=JSON.stringify(engine.optionOrders||[]);
   if(board.grid?.length)applyGridAnchor(board);
-  if(board.price)engine.markOptionPrice(board.price);
+  if(board.price)engine.markOptionPrice(board.price,board.optionType||contract?.optionType||'');
   if(JSON.stringify(engine.optionOrders||[])!==ordersBefore)await save();
   board.orders=String(engine.option?.scripCode||'')===String(contract?.scripCode||'')?engine.orders().filter(order=>!order.parked):[];
   if(signalInfo)board.signalInfo=signalInfo;
