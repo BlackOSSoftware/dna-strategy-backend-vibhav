@@ -6,7 +6,7 @@ export const defaults = Object.freeze({
   quantity: 1, maxLegs: 4, entryBuffer: 2, gridStep: 7, targetPoints: 12,
   initialStop: 20, trailStartLeg: 3, trailStep: 8,
   maxLoss: 5000, maxProfit: 20000, tickSize: 0.05,
-  strategyStart: '09:15', strategyEnd: '15:15', signalInterval: '15minute', signalLock: true,
+  strategyStart: '09:15', strategyEnd: '15:15', signalInterval: '15minute', signalLock: true, emaOpenPeriod: 5, emaClosePeriod: 6,
   optionMoneyness: 'ATM', optionDepth: 1, optionRight: 'AUTO', optionMode: 'BOTH',
   callOnBuy: 'buy', callOnSell: 'sell', putOnBuy: 'sell', putOnSell: 'buy',
   gridSource: 'premium'
@@ -121,6 +121,11 @@ export class Strategy {
     if (!['1minute', '3minute', '5minute', '15minute', '30minute', '60minute'].includes(frame)) throw Error('Choose a signal timeframe of 1, 3, 5, 15, 30, or 60 minutes');
     next.signalInterval = frame;
     next.signalLock = next.signalLock !== false;
+    for (const [key, label] of [['emaOpenPeriod', 'EMA on Open period'], ['emaClosePeriod', 'EMA on Close period']]) {
+      const period = Number(next[key]);
+      if (!Number.isInteger(period) || period < 2 || period > 100) throw Error(`${label} must be a whole number from 2 to 100`);
+      next[key] = period;
+    }
     const labels = {quantity:'Quantity per leg',maxLegs:'Maximum legs',entryBuffer:'Entry buffer',gridStep:'Grid step',targetPoints:'Target per leg',initialStop:'Initial stop',trailStartLeg:'Trail starts at leg',trailStep:'Trailing step',maxLoss:'Max daily loss',maxProfit:'Max daily profit',tickSize:'Tick size'};
     for (const k of Object.keys(labels)) {
       if (!Number.isFinite(+next[k]) || +next[k] <= 0) throw Error(`${labels[k]} must be greater than 0`);
@@ -254,7 +259,7 @@ export class Strategy {
       else this.log('system','Existing mode continues on the current contract');
     }
     this.candles.push(bar); this.candles = this.candles.slice(-200);
-    const emaOpen = this.ema(5,'open'), emaClose = this.ema(6,'close');
+    const emaOpen = this.ema(Number(this.config.emaOpenPeriod) || 5,'open'), emaClose = this.ema(Number(this.config.emaClosePeriod) || 6,'close');
     bar.emaOpen = emaOpen === null ? null : fmt(emaOpen);
     bar.emaClose = emaClose === null ? null : fmt(emaClose);
     if (this.status === 'running' && !this.level && !this.pending && this.inSession(bar.time) && emaClose !== null && emaOpen !== null) {

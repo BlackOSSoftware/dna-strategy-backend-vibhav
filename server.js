@@ -6,7 +6,7 @@ import {Strategy, defaults, latestSignal, sessionSignal, signalSequence, upcomin
 import {SharekhanAuth} from './sharekhan-auth.js';
 import {StrategyStore} from './store.js';
 import {assertInstrument,instrumentMeta,optionMarket,optionRows,searchInstruments,warmInstrumentCache} from './instruments.js';
-import {marketCandles} from './market.js';
+import {marketCandles, setEmaPeriods} from './market.js';
 import {detectOption,optionSide,optionUnderlying,premiumAt,selectUnderlying,sideActions,sideGridField,sideGridKeys,withOptionGrid} from './options.js';
 import {attachLive} from './live.js';
 import {AngelData} from './angel.js';
@@ -51,6 +51,7 @@ function restore(snapshot){
   engine.signal=engine.signal||null;
   engine.startedAt=engine.startedAt||null;
   if(engine.status==='running'){engine.status='paused';engine.pending=null;engine.log('risk','Server restarted; manually resume after checking broker positions');}
+  setEmaPeriods(engine.config.emaOpenPeriod, engine.config.emaClosePeriod);
 }
 async function save(){await store.save(engine.snapshot());}
 const istToday=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -883,6 +884,7 @@ const server=http.createServer(async(req,res)=>{
         case '/api/tick':result=engine.tick(data.price);break;
         default:return reply(res,404,{error:'Unknown action'});
       }
+      if(setEmaPeriods(engine.config.emaOpenPeriod, engine.config.emaClosePeriod))boardDirty=true;
       if(!url.pathname.startsWith('/api/sharekhan/')&&!url.pathname.startsWith('/api/angel/'))await save();
       return reply(res,200,result);
     }

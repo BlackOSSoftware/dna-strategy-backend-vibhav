@@ -61,9 +61,20 @@ export function emaSeries(candles, length, pick) {
   });
 }
 
+const emaPeriods = {open:5, close:6};
+export function setEmaPeriods(open, close) {
+  const nextOpen = Number.isInteger(Number(open)) && Number(open) >= 2 ? Number(open) : 5;
+  const nextClose = Number.isInteger(Number(close)) && Number(close) >= 2 ? Number(close) : 6;
+  if (nextOpen === emaPeriods.open && nextClose === emaPeriods.close) return false;
+  emaPeriods.open = nextOpen;
+  emaPeriods.close = nextClose;
+  for (const entry of cache.values()) entry?.frames?.clear?.();
+  return true;
+}
+
 function withAverages(candles) {
-  const emaOpen = emaSeries(candles, 5, candle => candle.open);
-  const emaClose = emaSeries(candles, 6, candle => candle.close);
+  const emaOpen = emaSeries(candles, emaPeriods.open, candle => candle.open);
+  const emaClose = emaSeries(candles, emaPeriods.close, candle => candle.close);
   return candles.map((candle, index) => ({...candle, emaOpen:emaOpen[index], emaClose:emaClose[index]}));
 }
 

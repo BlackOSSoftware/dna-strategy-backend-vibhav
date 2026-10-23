@@ -1,6 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {aggregateCandles, emaSeries, fillIntradayGaps, marketCandles} from './market.js';
+import {aggregateCandles, emaSeries, fillIntradayGaps, marketCandles, setEmaPeriods} from './market.js';
+
+test('EMA periods can be changed and the chart values follow them',async()=>{
+  const start=Math.floor(Date.parse('2026-10-15T09:15:00+05:30')/1000);
+  const rows=Array.from({length:20},(_,i)=>[start+i*60,100+i,101+i,99+i,100.5+i,10]);
+  const angel={status:()=>({connected:true}),candles:async()=>rows};
+  setEmaPeriods(5,6);
+  const before=await marketCandles({exchange:'NC',scripCode:'40000',symbol:'EMA',interval:'1minute',angel});
+  assert.equal(before.candles[3].emaOpen,null);
+  assert.ok(before.candles[4].emaOpen>0);
+  assert.equal(setEmaPeriods(3,9),true);
+  const after=await marketCandles({exchange:'NC',scripCode:'40000',symbol:'EMA',interval:'1minute',angel});
+  assert.ok(after.candles[2].emaOpen>0);
+  assert.equal(after.candles[7].emaClose,null);
+  assert.ok(after.candles[8].emaClose>0);
+  setEmaPeriods(5,6);
+});
 
 test('chart candles come from Angel and retain Sharekhan routing code',async()=>{
   let received;
