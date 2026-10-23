@@ -126,6 +126,7 @@ export class Strategy {
       if (!Number.isInteger(period) || period < 2 || period > 100) throw Error(`${label} must be a whole number from 2 to 100`);
       next[key] = period;
     }
+    if (next.emaOpenPeriod >= next.emaClosePeriod) throw Error(`EMA on Open period (${next.emaOpenPeriod}) must be smaller than EMA on Close period (${next.emaClosePeriod})`);
     const labels = {quantity:'Quantity per leg',maxLegs:'Maximum legs',entryBuffer:'Entry buffer',gridStep:'Grid step',targetPoints:'Target per leg',initialStop:'Initial stop',trailStartLeg:'Trail starts at leg',trailStep:'Trailing step',maxLoss:'Max daily loss',maxProfit:'Max daily profit',tickSize:'Tick size'};
     for (const k of Object.keys(labels)) {
       if (!Number.isFinite(+next[k]) || +next[k] <= 0) throw Error(`${labels[k]} must be greater than 0`);

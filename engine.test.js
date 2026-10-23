@@ -253,6 +253,15 @@ test('starting the current signal drops a finished or rejected old grid',()=>{
   const kept=t.start('buy','paper',{scripCode:'1'},'existing');
   assert.equal(kept.optionOrders.length,2);
 });
+test('EMA on Open must be a shorter period than EMA on Close',()=>{
+  const s=new Strategy();
+  assert.equal(s.config.emaOpenPeriod,5);
+  assert.equal(s.config.emaClosePeriod,6);
+  assert.throws(()=>s.configure({emaOpenPeriod:6,emaClosePeriod:5}),/must be smaller than EMA on Close/);
+  assert.throws(()=>s.configure({emaOpenPeriod:7,emaClosePeriod:7}),/must be smaller than EMA on Close/);
+  assert.equal(s.configure({emaOpenPeriod:9,emaClosePeriod:21}).config.emaClosePeriod,21);
+  assert.equal(s.configure({maxLoss:2000}).config.maxLoss,2000);
+});
 test('every start counts P&L and the daily limits from zero',()=>{
   const s=new Strategy({maxLoss:1000,maxProfit:1000});
   s.realized=-705.25;
