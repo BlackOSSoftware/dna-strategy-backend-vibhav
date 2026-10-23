@@ -41,7 +41,7 @@ export function attachLive(server, {nextTick, intervalMs = 1000, idleIntervalMs 
     try {
       const tick = await nextTick();
       if (tick) {
-        const nextSignature = `${tick.error || ''}|${tick.nifty ?? ''}|${tick.price ?? ''}|${JSON.stringify(tick.prices || {})}|${(tick.orders || []).map(order => `${order.right || ''}${order.level}:${order.status}`).join(',')}`;
+        const nextSignature = `${tick.run?.status || ''}|${tick.run?.events?.[0]?.id || ''}|${tick.error || ''}|${tick.nifty ?? ''}|${tick.price ?? ''}|${JSON.stringify(tick.prices || {})}|${(tick.orders || []).map(order => `${order.right || ''}${order.level}:${order.status}`).join(',')}`;
         latest = {type:'tick', at:started, took:Date.now() - started, ...tick};
         if (nextSignature !== signature) {
           signature = nextSignature;

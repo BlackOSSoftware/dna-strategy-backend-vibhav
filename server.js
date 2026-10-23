@@ -408,12 +408,19 @@ async function pricePositions(book){
     else if(!position.net)position.pnl=booked;
   }
 }
+function applyFillsWithLog(book){
+  const before=new Map(engine.orders().map(order=>[order,order.status]));
+  applyBrokerFills(engine.orders(), book?.orders||[], (order, price, reason)=>engine.closeOptionOrder(order, price, reason), {trustedBook:!!book?.connected});
+  for(const order of engine.orders()){
+    if(before.get(order)==='pending'&&order.status==='open'&&order.brokerOrderId)engine.log('fill',`Level ${order.level} ${order.right||''} filled at ${order.filled} · Sharekhan #${order.brokerOrderId}`);
+  }
+}
 async function syncBookOrders(book){
   const orders=engine.orders();
   if(!book||!orders.some(order=>order.brokerOrderId||order.exitBrokerOrderId))return;
   const stamp=()=>`${engine.orders().length}|`+engine.orders().map(order=>`${order.id}:${order.status}:${order.brokerOrderId||''}:${order.rejectReason||''}`).join('|');
   const before=stamp();
-  applyBrokerFills(orders, book.orders, (order, price, reason)=>engine.closeOptionOrder(order, price, reason), {trustedBook:!!book.connected});
+  applyFillsWithLog(book);
   if(book.connected){
     for(const {order,row,price} of manualBrokerExits(engine.orders(), book.orders, claimedExits)){
       let exitPrice=price;
@@ -568,7 +575,7 @@ async function closePosition(data){
   }
   engine.log('order',`Square off ${position.tradingSymbol} · ${Math.abs(position.net)} qty at ${price} · ${sent.orderId}`);
   await save();
-  return {ok:true,orderId:sent.orderId,price,quantity:Math.abs(position.net)};
+  return {...engine.snapshot(),closeResult:{orderId:sent.orderId,price,quantity:Math.abs(position.net)}};
 }
 async function liveContract(contract){
   if(!contract?.scripCode)return contract;
@@ -660,7 +667,7 @@ async function executeLiveGrid(board){
   try{
     seedLiveGrid(board);
     const book=await brokerBook();
-    applyBrokerFills(engine.orders(), book.orders||[], (order, price, reason)=>engine.closeOptionOrder(order, price, reason), {trustedBook:!!book.connected});
+    applyFillsWithLog(book);
     for(const order of engine.orders()){
       if(order.status==='rejected'&&order.rejectReason&&!order.rejectLogged){
         order.rejectLogged=true;
@@ -927,8 +934,8 @@ async function start(){
       }
       if(engine.option?.optionType&&optionLtp&&prices[engine.option.optionType]==null)prices[engine.option.optionType]=optionLtp;
       const liveBoard=sideList.length?{...board,price,sides:sideList.map(side=>({...side,price:prices[side.optionType||'CE']||side.price}))}:{...board,price};
-      const run={status:engine.status,tradeMode:engine.tradeMode,direction:engine.direction,signal:engine.signal||null};
       if(engine.mode==='live')await executeLiveGrid(liveBoard);
+      const run={status:engine.status,haltReason:engine.haltReason||'',tradeMode:engine.tradeMode,direction:engine.direction,signal:engine.signal||null,events:(engine.events||[]).slice(0,8).map(event=>({id:event.id,type:event.type,message:event.message,pnl:event.pnl??null}))};
       if(!price && !chartLtp && !Object.keys(prices).length)return {error:board?.gridError||'Waiting for the option price',run};
       const orders=sideList.length?sideList.flatMap(side=>(side.orders||[]).map(order=>({...order,right:order.right||side.optionType}))):(board.orders||[]);
       return {nifty:chartLtp||board.nifty,price,prices,right:engine.option?.optionType||board.optionType||'',bid:board.bid,ask:board.ask,label:board.label,side:board.side,run,orders:orders.map(order=>({id:order.id,level:order.level,right:order.right||'',status:order.status,entry:order.entry,stop:order.stop}))};
