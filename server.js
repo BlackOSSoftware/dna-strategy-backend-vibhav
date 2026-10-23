@@ -376,6 +376,19 @@ function allowOrigin(req,res){
 }
 function reply(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 let bookCache={at:0,value:null};
+let publicIpCache={at:0,ip:''};
+async function serverPublicIp(){
+  const fixed=String(process.env.SERVER_PUBLIC_IP||'').trim();
+  if(fixed)return {ip:fixed,source:'configured'};
+  if(publicIpCache.ip&&Date.now()-publicIpCache.at<3600000)return {ip:publicIpCache.ip,source:'detected'};
+  for(const source of ['https://api.ipify.org','https://ifconfig.me/ip','https://icanhazip.com']){
+    try{
+      const text=(await (await fetch(source,{signal:AbortSignal.timeout(5000)})).text()).trim();
+      if(/^\d{1,3}(\.\d{1,3}){3}$/.test(text)){publicIpCache={at:Date.now(),ip:text};return {ip:text,source:'detected'};}
+    }catch{}
+  }
+  return {ip:publicIpCache.ip||'',source:publicIpCache.ip?'detected':'unavailable'};
+}
 async function verifyBroker(){
   const hadSession=!!broker.session;
   const status=await broker.verify();
@@ -837,6 +850,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET'&&url.pathname==='/api/option')return reply(res,200,await optionBoard(url));
     if(req.method==='GET'&&url.pathname==='/api/angel/status')return reply(res,200,angel.status());
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/status')return reply(res,200,await verifyBroker());
+    if(req.method==='GET'&&url.pathname==='/api/server-ip')return reply(res,200,await serverPublicIp());
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/book')return reply(res,200,await brokerBook(url.searchParams.get('fresh')==='1'));
     if(req.method==='POST'&&url.pathname.startsWith('/api/')){
       const data=await body(req); let result;
