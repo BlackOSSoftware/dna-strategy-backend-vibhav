@@ -183,6 +183,8 @@ export class Strategy {
     if (this.orders().length && this.orders().every(order => dead.has(String(order.status || '').toLowerCase()))) this.optionOrders = [];
     const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !dead.has(String(order.status || '').toLowerCase())));
     if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
+    if (this.realized !== 0) this.log('system', `P&L reset to 0 for this run (previous ${fmt(this.realized)})`);
+    this.realized = 0;
     if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade && nextTrade !== 'live') { this.mode = mode; return this.resume(); }
     if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
       const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}};

@@ -253,6 +253,18 @@ test('starting the current signal drops a finished or rejected old grid',()=>{
   const kept=t.start('buy','paper',{scripCode:'1'},'existing');
   assert.equal(kept.optionOrders.length,2);
 });
+test('every start counts P&L and the daily limits from zero',()=>{
+  const s=new Strategy({maxLoss:1000,maxProfit:1000});
+  s.realized=-705.25;
+  s.optionOrders=[{level:1,side:'buy',status:'closed',reason:'manual',brokerOrderId:'1',entry:128.25,pnl:-468}];
+  const live=s.start('buy','live',null,'live');
+  assert.equal(live.realized,0);
+  assert.equal(live.pnl,0);
+  s.stop();
+  s.realized=-312;
+  const again=s.start('buy','paper',{scripCode:'1'},'existing');
+  assert.equal(again.realized,0);
+});
 test('a running strategy cannot be started again',()=>{
   const s=new Strategy();
   s.start('buy','paper',null,'live');
