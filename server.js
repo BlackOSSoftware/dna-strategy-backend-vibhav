@@ -414,59 +414,67 @@ function paperOrderLabel(order){
   return `${name} ${strike} ${right} · L${order.level}`.trim();
 }
 async function paperBook(){
-  const rows=engine.orders().filter(order=>!order.parked&&order.routing!=='live');
-  const prices={};
-  if(engine.optionPrice>0&&engine.option?.optionType)prices[engine.option.optionType]=engine.optionPrice;
-  for(const order of rows.filter(item=>item.status==='open')){
-    const right=order.right||'CE';
-    if(prices[right]>0)continue;
-    try{
-      const quote=await angel.quote(contractFor(order));
-      if(quote?.price>0)prices[right]=quote.price;
-    }catch{}
+  try{
+    const rows=(engine.orders()||[]).filter(order=>!order.parked&&order.routing!=='live');
+    const prices={};
+    if(engine.optionPrice>0&&engine.option?.optionType)prices[engine.option.optionType]=engine.optionPrice;
+    for(const order of rows.filter(item=>item.status==='open')){
+      const right=order.right||'CE';
+      if(prices[right]>0)continue;
+      try{
+        const contract=contractFor(order);
+        if(!contract?.scripCode)continue;
+        const quote=await angel.quote(contract);
+        if(quote?.price>0)prices[right]=quote.price;
+      }catch{}
+    }
+    const orders=rows.filter(order=>order.status!=='draft').map(order=>{
+      const lot=Number(engine.lotOf(order))||1;
+      const qty=Number(order.quantity)||0;
+      const units=qty*lot;
+      const done=order.status==='open'||order.status==='closed'?units:0;
+      const price=order.status==='closed'?(order.exit??order.filled):order.status==='open'?(order.filled??order.entry):order.entry;
+      return {
+        orderId:`P${order.id}`,
+        symbol:paperOrderLabel(order),
+        side:order.side==='short'?'SELL':'BUY',
+        quantity:String(units),
+        filled:String(done),
+        price:Number(price)>0?Number(price):null,
+        status:String(order.status||'').toUpperCase(),
+        reason:order.reason||order.exitReason||(order.status==='pending'?'Waiting for entry':''),
+        product:'PAPER',
+        level:order.level,
+        right:order.right||'',
+        id:order.id
+      };
+    }).reverse();
+    const positions=rows.filter(order=>order.status==='open'&&order.filled>0).map(order=>{
+      const lot=Number(engine.lotOf(order))||1;
+      const qty=Number(order.quantity)||0;
+      const units=qty*lot;
+      const ltp=prices[order.right||'CE']||null;
+      const pnl=ltp>0?((order.side==='buy'?ltp-order.filled:order.filled-ltp)*units):null;
+      return {
+        symbol:paperOrderLabel(order),
+        side:order.side==='short'?'SELL':'BUY',
+        quantity:String(units),
+        net:order.side==='short'?-units:units,
+        avg:order.filled,
+        ltp:ltp>0?ltp:null,
+        pnl:pnl==null?null:Math.round(pnl*100)/100,
+        product:'PAPER',
+        scripCode:order.scripCode||'',
+        level:order.level,
+        right:order.right||'',
+        id:order.id,
+        paper:true
+      };
+    });
+    return {connected:true,mode:'paper',orders,positions,profile:{},funds:null};
+  }catch(error){
+    return {connected:true,mode:'paper',orders:[],positions:[],profile:{},funds:null,error:error.message||'Paper book failed'};
   }
-  const orders=rows.filter(order=>order.status!=='draft').map(order=>{
-    const lot=engine.lotOf(order);
-    const units=order.quantity*lot;
-    const done=order.status==='open'||order.status==='closed'?units:0;
-    const price=order.status==='closed'?(order.exit??order.filled):order.status==='open'?(order.filled??order.entry):order.entry;
-    return {
-      orderId:`P${order.id}`,
-      symbol:paperOrderLabel(order),
-      side:order.side==='short'?'SELL':'BUY',
-      quantity:String(units),
-      filled:String(done),
-      price:price??null,
-      status:String(order.status||'').toUpperCase(),
-      reason:order.reason||order.exitReason||(order.status==='pending'?'Waiting for entry':''),
-      product:'PAPER',
-      level:order.level,
-      right:order.right||'',
-      id:order.id
-    };
-  }).reverse();
-  const positions=rows.filter(order=>order.status==='open'&&order.filled>0).map(order=>{
-    const lot=engine.lotOf(order);
-    const units=order.quantity*lot;
-    const ltp=prices[order.right||'CE']||null;
-    const pnl=ltp>0?((order.side==='buy'?ltp-order.filled:order.filled-ltp)*units):null;
-    return {
-      symbol:paperOrderLabel(order),
-      side:order.side==='short'?'SELL':'BUY',
-      quantity:String(units),
-      net:order.side==='short'?-units:units,
-      avg:order.filled,
-      ltp:ltp>0?ltp:null,
-      pnl:pnl==null?null:Math.round(pnl*100)/100,
-      product:'PAPER',
-      scripCode:order.scripCode||'',
-      level:order.level,
-      right:order.right||'',
-      id:order.id,
-      paper:true
-    };
-  });
-  return {connected:true,mode:'paper',orders,positions,profile:{},funds:null};
 }
 function positionContract(position){
   const option=position?.option;
