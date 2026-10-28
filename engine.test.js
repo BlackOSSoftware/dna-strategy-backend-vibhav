@@ -379,6 +379,23 @@ test('paper start with open leg parks it and day P&L is 0 so max profit does not
   assert.equal(s.status,'running');
   assert.equal(s.realized,0);
 });
+test('paper start drops unused drafts without cancelling them into history',()=>{
+  const s=new Strategy({maxLoss:5000,maxProfit:5000});
+  s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  s.optionOrders=[
+    {id:1,level:1,side:'buy',status:'open',routing:'paper',right:'CE',entry:100,filled:100,quantity:1,lotSize:65,target:200,stop:10,signal:'BUY 100'},
+    {id:2,level:2,side:'buy',status:'draft',routing:'paper',right:'CE',entry:107,quantity:1,lotSize:65,target:116,stop:99},
+    {id:3,level:3,side:'buy',status:'pending',routing:'paper',right:'CE',entry:114,quantity:1,lotSize:65,target:123,stop:106}
+  ];
+  s.optionPrice=105;
+  s.paperHistory=[{id:9,level:1,side:'buy',status:'cancelled',routing:'paper',reason:'New paper run',entry:90,filled:0}];
+  s.stop();
+  s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  assert.equal(s.orders().length,0);
+  assert.equal(s.paperHistory.filter(o=>o.status==='cancelled').length,0);
+  assert.equal(s.paperHistory.filter(o=>o.status==='closed'&&o.id===1).length,1);
+  assert.ok(!s.paperHistory.some(o=>o.id===2||o.id===3));
+});
 test('call and put grids keep their own step and quantity',()=>{
   const s=new Strategy();
   s.configure({optionMode:'BOTH',callGridStep:5,putGridStep:11,callQuantity:1,putQuantity:2,callTargetPoints:9,putTargetPoints:4,callInitialStop:8,putInitialStop:6});

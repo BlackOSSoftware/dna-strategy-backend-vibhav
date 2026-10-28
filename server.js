@@ -472,7 +472,14 @@ async function paperBook(){
     }
     const seen=new Set();
     const orders=[];
-    for(const order of [...live.filter(item=>item.status!=='draft'), ...history].reverse()){
+    const junkCancel=order=>{
+      const status=String(order.status||'').toLowerCase();
+      if(status==='draft')return true;
+      // Unused grid levels cancelled on a fresh Start — not real history
+      if((status==='cancelled'||status==='canceled')&&!(Number(order.filled)>0))return true;
+      return false;
+    };
+    for(const order of [...live.filter(item=>!junkCancel(item)), ...history.filter(item=>!junkCancel(item))].reverse()){
       const key=String(order.id);
       if(seen.has(key))continue;
       seen.add(key);

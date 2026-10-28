@@ -196,20 +196,30 @@ export class Strategy {
     }
 
     // Paper Start = fresh day for local paper legs only. Soft-resume with open paper + realized=0
-    // re-hits max profit on the next tick and only "closes" — so park pure paper, keep broker rows.
+    // re-hits max profit on the next tick and only "closes" — so park filled paper, drop unused drafts.
     if (mode === 'paper') {
       const mark = this.optionPrice || this.lastPrice;
+      const keep = [];
       for (const order of this.orders()) {
-        if (!isPurePaper(order)) continue;
-        if (order.status === 'open') {
+        if (!isPurePaper(order)) { keep.push(order); continue; }
+        if (order.status === 'open' && Number(order.filled) > 0) {
           const px = Number(mark) > 0 ? mark : (order.filled || order.entry);
           if (Number(px) > 0) this.closeOptionOrder(order, px, 'New paper run');
-          else { order.status = 'cancelled'; order.reason = 'New paper run'; }
-        } else if (order.status === 'pending' || order.status === 'draft') {
-          order.status = 'cancelled'; order.reason = 'New paper run';
+          else { order.status = 'closed'; order.reason = 'New paper run'; order.exit = order.filled; order.pnl = 0; }
+          keep.push(order); // closed fill → archive into history below
+        } else if (isDead(order) && (Number(order.filled) > 0 || order.status === 'closed')) {
+          keep.push(order); // real closed trades stay in history
         }
+        // draft / pending / never-filled cancels: drop silently — do not spam the book
       }
+      this.optionOrders = keep;
       this.archivePaperOrders();
+      // Scrub earlier Start noise: cancelled unused levels that never filled
+      this.paperHistory = (this.paperHistory || []).filter(order => {
+        const status = String(order.status || '').toLowerCase();
+        if ((status === 'cancelled' || status === 'canceled') && !(Number(order.filled) > 0)) return false;
+        return true;
+      });
     } else if (this.orders().some(order => isPurePaper(order) && isDead(order))) {
       this.archivePaperOrders();
     }
