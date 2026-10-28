@@ -940,6 +940,7 @@ const server=http.createServer(async(req,res)=>{
         case '/api/kill':await squareLivePositions();result=engine.kill();break;
         case '/api/new-day':result=engine.newDay();break;
         case '/api/activity/clear':result=engine.clearActivity();break;
+        case '/api/paper/clear':result=engine.clearPaperBook();break;
         case '/api/candle':result=engine.candle(data);break;
         case '/api/tick':result=engine.tick(data.price);break;
         default:return reply(res,404,{error:'Unknown action'});

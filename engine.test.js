@@ -253,6 +253,20 @@ test('starting the current signal drops a finished or rejected old grid',()=>{
   const kept=t.start('buy','paper',{scripCode:'1'},'existing');
   assert.equal(kept.optionOrders.length,2);
 });
+test('paper book can be cleared only when the strategy is not running',()=>{
+  const s=new Strategy();
+  s.status='running';
+  s.optionOrders=[{id:1,level:1,side:'buy',status:'closed',routing:'paper',entry:100,reason:'Target'}];
+  assert.throws(()=>s.clearPaperBook(),/Stop the strategy before clearing/);
+  s.status='paused';
+  s.optionOrders=[
+    {id:1,level:1,side:'buy',status:'closed',routing:'paper',entry:100,reason:'Maximum profit'},
+    {id:2,level:2,side:'buy',status:'open',routing:'live',brokerOrderId:'99',entry:110}
+  ];
+  const snap=s.clearPaperBook();
+  assert.equal(snap.optionOrders.length,1);
+  assert.equal(snap.optionOrders[0].routing,'live');
+});
 test('EMA on Open must be a shorter period than EMA on Close',()=>{
   const s=new Strategy();
   assert.equal(s.config.emaOpenPeriod,5);

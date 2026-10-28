@@ -234,6 +234,14 @@ export class Strategy {
   }
   newDay() { if (this.legs.length) throw Error('Open positions must be closed first'); this.reset(); this.log('system','New trading day reset'); return this.snapshot(); }
   clearActivity() { this.events = []; return this.snapshot(); }
+  clearPaperBook() {
+    if (this.status === 'running') throw Error('Stop the strategy before clearing the paper book');
+    const before = this.orders().length;
+    this.optionOrders = this.orders().filter(order => order.routing === 'live' && (order.brokerOrderId || order.status === 'open' || order.status === 'pending'));
+    const removed = before - this.orders().length;
+    this.log('system', removed ? `Paper book cleared · ${removed} paper order${removed === 1 ? '' : 's'} removed` : 'Paper book already empty');
+    return this.snapshot();
+  }
   ema(length, source) {
     if (this.candles.length < length) return null;
     const k = 2 / (length + 1);
