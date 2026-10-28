@@ -14,6 +14,7 @@ import {login, tokenFrom, verifyToken} from './auth.js';
 import {sharekhanBook} from './sharekhan-book.js';
 import {alignOrderContract, submitLiveOrder} from './sharekhan-orders.js';
 import {applyBrokerFills, liveIntents, manualBrokerExits, trailOpenStops} from './live-grid.js';
+import {advancePaperGrid, seedGridOrders} from './paper-grid.js';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const stateFile=path.join(root,'data','state.json');
@@ -456,13 +457,13 @@ async function syncBookOrders(book){
   }
   if(stamp()!==before)await save();
 }
-let liveBusy=false, liveAt=0, signalAt=0, lockFreeSince=null, boardDirty=false;
+let liveBusy=false, liveAt=0, paperBusy=false, paperAt=0, signalAt=0, lockFreeSince=null, boardDirty=false;
 const claimedExits=new Set();
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
   const tradeMode=data.tradeMode==='live'?'live':'existing';
   if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
-  if(mode==='live'&&!angel.status().connected)throw Error('Connect Angel One before starting live trading');
+  if(!angel.status().connected)throw Error('Connect Angel One before starting — paper and live both need the live option price feed');
   let startSignal=null;
   if(tradeMode==='existing'){
     try{
@@ -660,16 +661,13 @@ async function cancelLiveOrder(order){
   }
   await sendLive(contractFor(order), order);
 }
-function seedLiveGrid(board){
-  const sides=board?.sides?.length?board.sides:[board];
-  for(const side of sides){
-    const right=side?.optionType||'CE';
-    if(engine.orders().some(order=>(order.right||'CE')===right&&!order.parked)||!side?.grid?.length)continue;
-    const rows=side.grid.filter(row=>row.entry>0&&row.target>0&&row.stop>0);
-    if(!rows.length)continue;
-    const made=rows.map(row=>engine.draftOrder({...row,side:side.side==='short'?'short':'buy',quantity:side.orderQuantity||engine.config.quantity,right,scripCode:side.scripCode,strike:side.strike,expiry:side.expiry,tradingSymbol:side.tradingSymbol,lotSize:side.lotSize}));
-    engine.optionOrders=[...engine.orders(),...made];
-  }
+async function executePaperGrid(board){
+  if(engine.mode!=='paper'||engine.status!=='running'||!engine.inSession()||paperBusy||Date.now()-paperAt<1000)return;
+  if(engine.tradeMode==='live'&&!(engine.signal?.spot>0))return;
+  paperBusy=true; paperAt=Date.now();
+  try{
+    if(advancePaperGrid(engine, board))await save();
+  }finally{paperBusy=false;}
 }
 async function executeLiveGrid(board){
   if(engine.mode!=='live'||engine.status!=='running'||!engine.inSession()||liveBusy||Date.now()-liveAt<1000)return;
@@ -679,7 +677,7 @@ async function executeLiveGrid(board){
   if(!sides.some(side=>side?.price>0))return;
   liveBusy=true; liveAt=Date.now();
   try{
-    seedLiveGrid(board);
+    seedGridOrders(engine, board);
     const book=await brokerBook();
     applyFillsWithLog(book);
     for(const order of engine.orders()){
@@ -924,7 +922,7 @@ async function start(){
     console.log(`Grid API: http://${host}:${port} · MongoDB ${store.dbName}`);
     warmInstrumentCache();
     let boardCache=null,boardAt=0;
-    attachLive(server,{intervalMs:1000,idleIntervalMs:()=>angel.feed?.healthy()?1000:10000,authorize:token=>!!verifyToken(token),shouldTick:()=>engine.status==='running'&&(engine.mode==='live'||engine.tradeMode==='live'),nextTick:async()=>{
+    attachLive(server,{intervalMs:1000,idleIntervalMs:()=>angel.feed?.healthy()?1000:10000,authorize:token=>!!verifyToken(token),shouldTick:()=>engine.status==='running',nextTick:async()=>{
       const url=new URL('http://127.0.0.1/api/option');
       url.searchParams.set('moneyness',engine.config.optionMoneyness||'ATM');
       url.searchParams.set('depth',String(engine.config.optionDepth||1));
@@ -951,6 +949,7 @@ async function start(){
       if(engine.option?.optionType&&optionLtp&&prices[engine.option.optionType]==null)prices[engine.option.optionType]=optionLtp;
       const liveBoard=sideList.length?{...board,price,sides:sideList.map(side=>({...side,price:prices[side.optionType||'CE']||side.price}))}:{...board,price};
       if(engine.mode==='live')await executeLiveGrid(liveBoard);
+      else if(engine.mode==='paper')await executePaperGrid(liveBoard);
       const run={status:engine.status,haltReason:engine.haltReason||'',tradeMode:engine.tradeMode,direction:engine.direction,signal:engine.signal||null,events:(engine.events||[]).slice(0,8).map(event=>({id:event.id,type:event.type,message:event.message,pnl:event.pnl??null}))};
       if(!price && !chartLtp && !Object.keys(prices).length)return {error:board?.gridError||'Waiting for the option price',run};
       const orders=sideList.length?sideList.flatMap(side=>(side.orders||[]).map(order=>({...order,right:order.right||side.optionType}))):(board.orders||[]);
