@@ -567,27 +567,44 @@ const claimedExits=new Set();
 async function startStrategy(data, fresh){
   const mode=data.mode==='live'?'live':'paper';
   const tradeMode=data.tradeMode==='live'?'live':'existing';
-  if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
-  if(!angel.status().connected)throw Error('Connect Angel One before starting — paper and live both need the live option price feed');
-  let startSignal=null;
-  if(tradeMode==='existing'){
-    try{
-      const market=await signalMarket();
-      startSignal=signalSequence(market.candles||[],{after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()}).filter(item=>item?.spot>0).at(-1)||null;
-    }catch{}
+  try{
+    if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
+    if(!angel.status().connected)throw Error('Connect Angel One before starting — option price feed chahiye (paper aur live dono)');
+    let startSignal=null;
+    if(tradeMode==='existing'){
+      try{
+        const market=await signalMarket();
+        startSignal=signalSequence(market.candles||[],{after:0,strategyStart:engine.config.strategyStart,strategyEnd:engine.config.strategyEnd,onDay:istToday(),minutes:signalMinutes()}).filter(item=>item?.spot>0).at(-1)||null;
+      }catch{}
+    }
+    const direction=startSignal?(startSignal.side==='short'?'short':'buy'):data.direction;
+    if(!['buy','short'].includes(direction))throw Error('Choose buy or short');
+    const hadActive=engine.orders().some(isActiveOrder);
+    let contract=null;
+    if(tradeMode!=='live'){
+      try{
+        contract=engine.option?.scripCode?engine.option:await resolveOption(engine.config,direction,data.spot);
+      }catch(error){
+        if(mode==='paper'&&engine.option?.scripCode)contract=engine.option;
+        else throw error;
+      }
+    }
+    lockFreeSince=null;signalAt=0;
+    const result=fresh?engine.start(direction,mode,contract,tradeMode):engine.arm(direction,mode,contract,tradeMode);
+    if(tradeMode==='existing'&&startSignal&&!hadActive&&engine.status==='running'){
+      engine.signal={...startSignal,side:direction};
+      boardDirty=true;
+      engine.log('signal',`Current signal held for this run: ${direction==='short'?'SELL':'BUY'} ${startSignal.spot}`);
+      await save();
+      return engine.snapshot();
+    }
+    await save();
+    return result;
+  }catch(error){
+    engine.log('risk',`Start failed · ${mode}${tradeMode==='live'?' · next signal':''}: ${error.message}`);
+    try{await save();}catch{}
+    throw error;
   }
-  const direction=startSignal?(startSignal.side==='short'?'short':'buy'):data.direction;
-  const hadActive=engine.orders().some(isActiveOrder);
-  const contract=tradeMode==='live'?null:(engine.option?.scripCode?engine.option:await resolveOption(engine.config,direction,data.spot));
-  lockFreeSince=null;signalAt=0;
-  const result=fresh?engine.start(direction,mode,contract,tradeMode):engine.arm(direction,mode,contract,tradeMode);
-  if(tradeMode==='existing'&&startSignal&&!hadActive&&engine.status==='running'){
-    engine.signal={...startSignal,side:direction};
-    boardDirty=true;
-    engine.log('signal',`Current signal held for this run: ${direction==='short'?'SELL':'BUY'} ${startSignal.spot}`);
-    return engine.snapshot();
-  }
-  return result;
 }
 function isActiveOrder(order){
   return !order.parked&&(order.status==='open'||(order.status==='pending'&&order.brokerOrderId)||(order.exitBrokerOrderId&&order.status!=='closed'));
@@ -997,6 +1014,7 @@ const server=http.createServer(async(req,res)=>{
         case '/api/kill':await squareLivePositions();result=engine.kill();break;
         case '/api/new-day':result=engine.newDay();break;
         case '/api/activity/clear':result=engine.clearActivity();break;
+        case '/api/activity/note':result=engine.note(data.message,data.type||(data.error?'risk':'system'));break;
         case '/api/paper/clear':result=engine.clearPaperBook();break;
         case '/api/candle':result=engine.candle(data);break;
         case '/api/tick':result=engine.tick(data.price);break;

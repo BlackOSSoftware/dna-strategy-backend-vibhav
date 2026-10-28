@@ -222,7 +222,7 @@ test('rejected broker orders do not block a next-signal start',()=>{
   assert.equal(snap.tradeMode,'live');
   const t=new Strategy();
   t.optionOrders=[{level:1,side:'buy',status:'pending',brokerOrderId:'X2',entry:100}];
-  assert.throws(()=>t.start('buy','paper',null,'live'),/Close the current option orders/);
+  assert.throws(()=>t.start('buy','paper',null,'live'),/Close (the current option|Sharekhan) orders/);
   const done=new Strategy();
   done.optionOrders=[{level:1,side:'buy',status:'closed',reason:'Closed in Sharekhan',brokerOrderId:'212992039',entry:122.5},{level:2,side:'buy',status:'draft',entry:129.5}];
   assert.equal(done.start('short','live',null,'live').status,'running');
@@ -378,6 +378,21 @@ test('paper start with open leg parks it and day P&L is 0 so max profit does not
   s.markOptionPrice(110,'CE');
   assert.equal(s.status,'running');
   assert.equal(s.realized,0);
+});
+test('paper start with next-signal does not fail on leftover paper legs',()=>{
+  const s=new Strategy({maxLoss:5000,maxProfit:5000});
+  s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  s.optionOrders=[
+    {id:1,level:1,side:'buy',status:'open',routing:'paper',right:'CE',entry:100,filled:100,quantity:1,lotSize:65,target:200,stop:10},
+    {id:2,level:2,side:'buy',status:'pending',routing:'paper',right:'CE',entry:107,quantity:1,lotSize:65,target:116,stop:99}
+  ];
+  s.optionPrice=105;
+  s.stop();
+  const snap=s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'live');
+  assert.equal(snap.status,'running');
+  assert.equal(snap.mode,'paper');
+  assert.equal(snap.tradeMode,'live');
+  assert.equal(snap.realized,0);
 });
 test('paper start drops unused drafts without cancelling them into history',()=>{
   const s=new Strategy({maxLoss:5000,maxProfit:5000});

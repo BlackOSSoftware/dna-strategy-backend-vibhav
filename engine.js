@@ -191,12 +191,10 @@ export class Strategy {
     const working = order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !isDead(order));
     const isBrokerOrder = order => order.routing === 'live' || !!order.brokerOrderId;
     const isPurePaper = order => !isBrokerOrder(order);
-    if (nextTrade === 'live' && this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !isDead(order)))) {
-      throw Error('Close the current option orders before Live mode');
-    }
 
     // Paper Start = fresh day for local paper legs only. Soft-resume with open paper + realized=0
     // re-hits max profit on the next tick and only "closes" — so park filled paper, drop unused drafts.
+    // Must run BEFORE the next-signal busy check, or leftover paper legs throw a fake "Live mode" error.
     if (mode === 'paper') {
       const mark = this.optionPrice || this.lastPrice;
       const keep = [];
@@ -222,6 +220,16 @@ export class Strategy {
       });
     } else if (this.orders().some(order => isPurePaper(order) && isDead(order))) {
       this.archivePaperOrders();
+    }
+
+    if (nextTrade === 'live') {
+      const busy = this.orders().some(order => {
+        if (mode === 'paper') return isBrokerOrder(order) && working(order);
+        return order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !isDead(order));
+      });
+      if (busy) throw Error(mode === 'paper'
+        ? 'Close Sharekhan orders before Next-signal paper'
+        : 'Close the current option orders before Live mode');
     }
 
     const hasWorking = this.orders().some(working);
@@ -250,6 +258,18 @@ export class Strategy {
       Object.assign(this, keep);
       this.realized = 0;
     }
+    if (mode === 'paper') {
+      // Spot/option paper Start always opens a fresh day run (activity + grid), never day-lock.
+      this.direction = null;
+      this.level = 0;
+      this.pending = null;
+      this.legs = [];
+      this.firstEntry = null;
+      this.sharedStop = null;
+      this.trailAnchor = null;
+      this.highWater = null;
+      this.lowWater = null;
+    }
     return this.arm(direction, mode, nextTrade === 'live' ? null : (contract || this.option), nextTrade);
   }
   stop() {
@@ -277,8 +297,15 @@ export class Strategy {
     if (this.tradeMode === 'live') { this.option = null; this.optionOrders = []; this.signal = null; this.startedAt = Date.now(); }
     else this.option = contract || this.option || null;
     this.status = 'running';
-    const label = this.tradeMode === 'live' ? 'LIVE mode · waiting for the next signal' : `EXISTING mode${this.option ? ` · ${this.option.label} ${this.option.expiry}` : ''}`;
+    const label = this.tradeMode === 'live' ? 'waiting for the next signal' : `current strike${this.option ? ` · ${this.option.label} ${this.option.expiry}` : ''}`;
     this.log('system',`${direction.toUpperCase()} armed in ${mode} · ${label} · day P&L 0`); return this.snapshot();
+  }
+  note(message, type = 'system') {
+    const text = String(message || '').trim();
+    if (!text) return this.snapshot();
+    const kind = ['risk', 'exit', 'fill', 'order', 'signal', 'settings', 'system'].includes(type) ? type : 'system';
+    this.log(kind, text);
+    return this.snapshot();
   }
   pause() { if (this.status === 'running') { this.status = 'paused'; this.pending = null; this.log('system','Paused; pending trigger cancelled'); } return this.snapshot(); }
   resume() { if (this.status !== 'paused') throw Error('Strategy is not paused'); this.status='running'; this.haltReason=null; this.log('system','Strategy started'); return this.snapshot(); }
