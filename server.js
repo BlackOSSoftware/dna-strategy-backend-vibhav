@@ -569,7 +569,14 @@ async function startStrategy(data, fresh){
   const tradeMode=data.tradeMode==='live'?'live':'existing';
   try{
     if(mode==='live'&&!broker.accessToken())throw Error('Connect Sharekhan before starting live trading');
-    if(!angel.status().connected)throw Error('Connect Angel One before starting — option price feed chahiye (paper aur live dono)');
+    if(!angel.status().connected){
+      // Paper/live both need premium — auto-login when backend credentials exist (JWT often expires overnight).
+      if(angel.status().configured){
+        try{await angel.login();}
+        catch(error){throw Error(`Angel One connect failed: ${error.message}. Dashboard se Angel login dabao, phir Start paper.`);}
+      }
+      if(!angel.status().connected)throw Error('Connect Angel One before starting — option price feed chahiye (paper aur live dono)');
+    }
     let startSignal=null;
     if(tradeMode==='existing'){
       try{
