@@ -54,15 +54,19 @@ test('paper grid fills level 1 at entry then opens level 2 after fill', () => {
   s.mode = 'paper';
   s.status = 'running';
   s.tradeMode = 'existing';
+  s.signal = {side: 'buy', spot: 22613.15, time: 1761623100};
   s.inSession = () => true;
   advancePaperGrid(s, boardFor(100, grid));
   assert.equal(s.orders()[0].status, 'open');
   assert.equal(s.orders()[0].filled, 100);
   assert.equal(s.orders()[0].routing, 'paper');
+  assert.equal(s.orders()[0].signalSpot, 22613.15);
+  assert.equal(s.orders()[0].signalSide, 'buy');
   assert.equal(s.orders()[1].status, 'draft');
   advancePaperGrid(s, boardFor(107, grid));
   assert.equal(s.orders()[1].status, 'open');
   assert.equal(s.orders()[1].filled, 107);
+  assert.equal(s.orders()[1].signalSpot, 22613.15);
 });
 
 test('paper grid exits on target and stop like live', () => {

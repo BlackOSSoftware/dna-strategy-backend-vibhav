@@ -59,7 +59,11 @@ export function advancePaperGrid(engine, board) {
       order.status = 'open';
       order.filled = order.entry;
       order.routing = 'paper';
-      engine.log('fill', `Paper level ${right} ${order.level} filled at ${order.filled}`);
+      if (typeof engine.stampSignal === 'function') engine.stampSignal(order);
+      const signal = order.signalSpot > 0
+        ? ` · ${order.signalSide === 'short' ? 'SELL' : 'BUY'} signal ${order.signalSpot}`
+        : '';
+      engine.log('fill', `Paper level ${right} ${order.level} filled at ${order.filled}${signal}`);
       changed = true;
     }
 

@@ -412,6 +412,7 @@ export class Strategy {
       order.status = 'pending';
       order.routing = input.live ? 'live' : 'paper';
       if (input.live) order.filled = null;
+      if (!input.live) this.stampSignal(order);
       this.log('order', `Placed level ${order.level} ${order.side.toUpperCase()} at ${order.entry}`);
     } else if (action === 'unplace') {
       if (order.status !== 'pending') throw Error('Only a placed pending order can be unplaced');
@@ -421,6 +422,13 @@ export class Strategy {
     this.numberOrders();
     return this.snapshot();
   }
+  stampSignal(order) {
+    if (!order || !(this.signal?.spot > 0)) return order;
+    order.signalSide = this.signal.side === 'short' ? 'short' : 'buy';
+    order.signalSpot = Number(this.signal.spot);
+    order.signalTime = Number(this.signal.time) || null;
+    return order;
+  }
   draftOrder(row) {
     const order = {id:this.nextId++, level:Number(row.level) || 0, side:row.side === 'short' ? 'short' : 'buy', right:String(row.right || '').toUpperCase(), entry:0, target:0, stop:0, quantity:this.config.quantity, status:'draft'};
     if (Number(row.lotSize) > 0) order.lotSize = Number(row.lotSize);
@@ -429,6 +437,7 @@ export class Strategy {
     if (row.expiry) order.expiry = row.expiry;
     if (row.tradingSymbol) order.tradingSymbol = row.tradingSymbol;
     this.applyOrder(order, row);
+    this.stampSignal(order);
     return order;
   }
   applyOrder(order, input) {

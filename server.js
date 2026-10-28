@@ -417,14 +417,27 @@ function paperOrderLabel(order){
   const right=order.right||engine.option?.optionType||'CE';
   return `${name} ${strike} ${right} · L${order.level}`.trim();
 }
+function paperSignalLabel(order){
+  if(!(Number(order?.signalSpot)>0))return '';
+  const side=order.signalSide==='short'?'SELL':'BUY';
+  let when='';
+  const t=Number(order.signalTime);
+  if(t>0){
+    const ms=t>1e12?t:t*1000;
+    when=' · '+new Date(ms).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit'});
+  }
+  return `${side} ${Number(order.signalSpot)}${when}`;
+}
 function paperBookRow(order){
   const lot=Number(engine.lotOf(order))||1;
   const qty=Number(order.quantity)||0;
   const units=qty*lot;
   const done=order.status==='open'||order.status==='closed'?units:0;
   const price=order.status==='closed'?(order.exit??order.filled):order.status==='open'?(order.filled??order.entry):order.entry;
+  const signal=paperSignalLabel(order);
   return {
     orderId:`P${order.id}`,
+    signal:signal||'—',
     symbol:paperOrderLabel(order),
     side:order.side==='short'?'SELL':'BUY',
     quantity:String(units),
@@ -435,7 +448,10 @@ function paperBookRow(order){
     product:'PAPER',
     level:order.level,
     right:order.right||'',
-    id:order.id
+    id:order.id,
+    signalSide:order.signalSide||'',
+    signalSpot:order.signalSpot||null,
+    signalTime:order.signalTime||null
   };
 }
 async function paperBook(){
