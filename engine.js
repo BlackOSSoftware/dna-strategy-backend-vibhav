@@ -108,6 +108,7 @@ export class Strategy {
     this.highWater = null; this.lowWater = null; this.sharedStop = null;
     this.haltReason = null; this.nextId = 1; this.firstEntry = null; this.trailAnchor = null; this.option = null;
     this.optionOrders = []; this.optionPrice = null; this.sideContracts = {}; this.gridKeys = {}; this.manualAnchors = {};
+    this.paperHistory = [];
   }
   log(type, message, data = {}) { this.events.unshift({id:this.nextId++, time:new Date().toISOString(), type, message, ...data}); this.events.length = Math.min(this.events.length, 200); }
   configure(input) {
@@ -186,14 +187,14 @@ export class Strategy {
       throw Error('Strategy is already running; stop it before starting again');
     }
     const dead = new Set(['rejected', 'cancelled', 'canceled', 'closed']);
-    if (this.orders().length && this.orders().every(order => dead.has(String(order.status || '').toLowerCase()))) this.optionOrders = [];
+    if (this.orders().length && this.orders().every(order => dead.has(String(order.status || '').toLowerCase()))) this.archivePaperOrders();
     const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !dead.has(String(order.status || '').toLowerCase())));
     if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
     if (this.realized !== 0) this.log('system', `P&L reset to 0 for this run (previous ${fmt(this.realized)})`);
     this.realized = 0;
     if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade && nextTrade !== 'live') { this.mode = mode; return this.resume(); }
     if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
-      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}};
+      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}, paperHistory:this.paperHistory || []};
       if (nextTrade === 'existing') { keep.option = contract || this.option; keep.optionOrders = this.optionOrders; }
       this.reset();
       Object.assign(this, keep);
@@ -234,10 +235,27 @@ export class Strategy {
   }
   newDay() { if (this.legs.length) throw Error('Open positions must be closed first'); this.reset(); this.log('system','New trading day reset'); return this.snapshot(); }
   clearActivity() { this.events = []; return this.snapshot(); }
+  archivePaperOrders(right = '') {
+    const slot = String(right || '').toUpperCase();
+    const dead = new Set(['rejected', 'cancelled', 'canceled', 'closed']);
+    const keep = [];
+    const archived = [];
+    for (const order of this.orders()) {
+      const paper = order.routing !== 'live';
+      const match = !slot || (order.right || 'CE') === slot;
+      if (paper && match && dead.has(String(order.status || '').toLowerCase())) archived.push({...order, archivedAt: Date.now()});
+      else keep.push(order);
+    }
+    if (!archived.length) { this.optionOrders = keep; return 0; }
+    this.paperHistory = [...(this.paperHistory || []), ...archived];
+    this.optionOrders = keep;
+    return archived.length;
+  }
   clearPaperBook() {
     if (this.status === 'running') throw Error('Stop the strategy before clearing the paper book');
-    const before = this.orders().length;
+    const before = this.orders().length + (this.paperHistory || []).length;
     this.optionOrders = this.orders().filter(order => order.routing === 'live' && (order.brokerOrderId || order.status === 'open' || order.status === 'pending'));
+    this.paperHistory = [];
     const removed = before - this.orders().length;
     this.log('system', removed ? `Paper book cleared · ${removed} paper order${removed === 1 ? '' : 's'} removed` : 'Paper book already empty');
     return this.snapshot();
@@ -495,5 +513,5 @@ export class Strategy {
   }
   snapshot() { return {config:this.config,signalFrame:this.config.signalInterval||'15minute',direction:this.direction,status:this.status,mode:this.mode,tradeMode:this.tradeMode||'existing',signal:this.signal||null,startedAt:this.startedAt||null,day:this.day,
     candles:this.candles,pending:this.pending,legs:this.legs,history:this.history,events:this.events,
-    realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice,gridKey:this.gridKey||'',manualAnchors:this.manualAnchors||{}}; }
+    realized:this.realized,pnl:this.pnl(),lastPrice:this.lastPrice,level:this.level,firstEntry:this.firstEntry,trailAnchor:this.trailAnchor,sharedStop:this.sharedStop,haltReason:this.haltReason,option:this.option,optionOrders:this.orders(),optionPrice:this.optionPrice,gridKey:this.gridKey||'',manualAnchors:this.manualAnchors||{},paperHistory:this.paperHistory||[]}; }
 }

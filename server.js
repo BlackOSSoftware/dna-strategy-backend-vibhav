@@ -51,6 +51,7 @@ function restore(snapshot){
   if(engine.tradeMode!=='live')engine.tradeMode='existing';
   engine.signal=engine.signal||null;
   engine.startedAt=engine.startedAt||null;
+  if(!Array.isArray(engine.paperHistory))engine.paperHistory=[];
   if(engine.status==='running'){engine.status='paused';engine.pending=null;engine.log('risk','Server restarted; manually resume after checking broker positions');}
   setEmaPeriods(engine.config.emaOpenPeriod, engine.config.emaClosePeriod);
 }
@@ -306,10 +307,11 @@ function setGridAnchor(data={}){
   if(clear)delete anchors[right];
   else anchors[right]={price,signalTime};
   engine.manualAnchors=anchors;
+  engine.archivePaperOrders(right);
   engine.optionOrders=engine.orders().filter(order=>(order.right||'CE')!==right);
   engine.gridKeys={...(engine.gridKeys||{}),[right]:''};
   boardDirty=true;
-  engine.log('order',clear?`${right} grid entry is automatic again`:`${right} grid entry set manually to ${price}; all levels follow it`);
+  engine.log('order',clear?`${right} grid entry is automatic again`:`${right} grid entry set manually to ${price}; previous paper trades stay in the book`);
   return engine.snapshot();
 }
 function currentSignalRef(settings){
@@ -337,6 +339,7 @@ function applyGridAnchor(board){
   if(!board.grid?.length)return;
   const install=()=>{
     try{
+      engine.archivePaperOrders(slot);
       const side=board.side==='short'?'short':'buy';
       const kept=engine.orders().filter(order=>(order.right||'CE')!==slot);
       const next=board.grid.map(row=>engine.draftOrder({...row,side,quantity:board.orderQuantity||engine.config.quantity,right:slot,scripCode:board.scripCode,strike:board.strike,expiry:board.expiry,tradingSymbol:board.tradingSymbol,lotSize:board.lotSize}));
@@ -346,10 +349,11 @@ function applyGridAnchor(board){
   };
   const previous=engine.gridKeys?.[slot]||'';
   const idle=!running&&!slotOrders().some(active);
+  // Closed history is archived, then a fresh working grid is installed — history stays in the paper book.
   if(idle&&slotOrders().some(dead))return install();
-  const firstLevel=slotOrders().find(order=>order.level===1);
+  const firstLevel=slotOrders().find(order=>order.level===1&&!dead(order));
   if(idle&&(source==='signal'||board.anchorSource==='manual')&&firstLevel&&Number(firstLevel.entry)!==Number(board.grid[0]?.entry))return install();
-  if(!slotOrders().length)return install();
+  if(!slotOrders().filter(order=>!dead(order)).length)return install();
   if(!locked&&previous&&previous!==key)return install();
   if(locked&&previous&&previous!==key)board.gridHeld=true;
   if(!previous)engine.gridKeys={...(engine.gridKeys||{}),[slot]:key};
@@ -413,12 +417,34 @@ function paperOrderLabel(order){
   const right=order.right||engine.option?.optionType||'CE';
   return `${name} ${strike} ${right} · L${order.level}`.trim();
 }
+function paperBookRow(order){
+  const lot=Number(engine.lotOf(order))||1;
+  const qty=Number(order.quantity)||0;
+  const units=qty*lot;
+  const done=order.status==='open'||order.status==='closed'?units:0;
+  const price=order.status==='closed'?(order.exit??order.filled):order.status==='open'?(order.filled??order.entry):order.entry;
+  return {
+    orderId:`P${order.id}`,
+    symbol:paperOrderLabel(order),
+    side:order.side==='short'?'SELL':'BUY',
+    quantity:String(units),
+    filled:String(done),
+    price:Number(price)>0?Number(price):null,
+    status:String(order.status||'').toUpperCase(),
+    reason:order.reason||order.exitReason||(order.status==='pending'?'Waiting for entry':''),
+    product:'PAPER',
+    level:order.level,
+    right:order.right||'',
+    id:order.id
+  };
+}
 async function paperBook(){
   try{
-    const rows=(engine.orders()||[]).filter(order=>!order.parked&&order.routing!=='live');
+    const live=(engine.orders()||[]).filter(order=>!order.parked&&order.routing!=='live');
+    const history=(engine.paperHistory||[]).filter(order=>order.routing!=='live');
     const prices={};
     if(engine.optionPrice>0&&engine.option?.optionType)prices[engine.option.optionType]=engine.optionPrice;
-    for(const order of rows.filter(item=>item.status==='open')){
+    for(const order of live.filter(item=>item.status==='open')){
       const right=order.right||'CE';
       if(prices[right]>0)continue;
       try{
@@ -428,28 +454,15 @@ async function paperBook(){
         if(quote?.price>0)prices[right]=quote.price;
       }catch{}
     }
-    const orders=rows.filter(order=>order.status!=='draft').map(order=>{
-      const lot=Number(engine.lotOf(order))||1;
-      const qty=Number(order.quantity)||0;
-      const units=qty*lot;
-      const done=order.status==='open'||order.status==='closed'?units:0;
-      const price=order.status==='closed'?(order.exit??order.filled):order.status==='open'?(order.filled??order.entry):order.entry;
-      return {
-        orderId:`P${order.id}`,
-        symbol:paperOrderLabel(order),
-        side:order.side==='short'?'SELL':'BUY',
-        quantity:String(units),
-        filled:String(done),
-        price:Number(price)>0?Number(price):null,
-        status:String(order.status||'').toUpperCase(),
-        reason:order.reason||order.exitReason||(order.status==='pending'?'Waiting for entry':''),
-        product:'PAPER',
-        level:order.level,
-        right:order.right||'',
-        id:order.id
-      };
-    }).reverse();
-    const positions=rows.filter(order=>order.status==='open'&&order.filled>0).map(order=>{
+    const seen=new Set();
+    const orders=[];
+    for(const order of [...live.filter(item=>item.status!=='draft'), ...history].reverse()){
+      const key=String(order.id);
+      if(seen.has(key))continue;
+      seen.add(key);
+      orders.push(paperBookRow(order));
+    }
+    const positions=live.filter(order=>order.status==='open'&&order.filled>0).map(order=>{
       const lot=Number(engine.lotOf(order))||1;
       const qty=Number(order.quantity)||0;
       const units=qty*lot;

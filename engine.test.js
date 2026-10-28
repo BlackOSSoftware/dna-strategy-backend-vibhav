@@ -263,9 +263,30 @@ test('paper book can be cleared only when the strategy is not running',()=>{
     {id:1,level:1,side:'buy',status:'closed',routing:'paper',entry:100,reason:'Maximum profit'},
     {id:2,level:2,side:'buy',status:'open',routing:'live',brokerOrderId:'99',entry:110}
   ];
+  s.paperHistory=[{id:9,level:1,side:'buy',status:'closed',routing:'paper',entry:90}];
   const snap=s.clearPaperBook();
   assert.equal(snap.optionOrders.length,1);
   assert.equal(snap.optionOrders[0].routing,'live');
+  assert.deepEqual(snap.paperHistory,[]);
+});
+test('closed paper trades stay in history when a new grid replaces drafts',()=>{
+  const s=new Strategy();
+  s.status='paused';
+  s.optionOrders=[
+    {id:1,level:1,side:'buy',status:'closed',routing:'paper',right:'CE',entry:100,exit:112,reason:'Target',filled:100,quantity:1},
+    {id:2,level:2,side:'buy',status:'draft',routing:'paper',right:'CE',entry:107,quantity:1}
+  ];
+  const moved=s.archivePaperOrders('CE');
+  assert.equal(moved,1);
+  assert.equal(s.paperHistory.length,1);
+  assert.equal(s.paperHistory[0].id,1);
+  assert.equal(s.orders().length,1);
+  assert.equal(s.orders()[0].status,'draft');
+  s.archivePaperOrders('CE');
+  s.optionOrders=[];
+  s.start('buy','paper',{scripCode:'1',label:'NIFTY'},'existing');
+  assert.equal(s.paperHistory.length,1);
+  assert.equal(s.paperHistory[0].reason,'Target');
 });
 test('EMA on Open must be a shorter period than EMA on Close',()=>{
   const s=new Strategy();
