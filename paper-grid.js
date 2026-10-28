@@ -62,8 +62,24 @@ export function advancePaperGrid(engine, board) {
       if (order.status !== 'draft' && order.status !== 'pending') continue;
       if (order.brokerOrderId) continue;
       engine.optionOrder({action: 'place', level: order.level, right, live: false});
+      const live = Number(side.price);
+      const entry = Number(order.entry);
+      // Stale limit (entry far from live after a fresh Start) would fill deep in profit and instantly hit max profit.
+      // Rebase that fill to the live premium so the new run starts flat.
+      let fillAt = entry;
+      if (Number.isFinite(live) && live > 0 && Number.isFinite(entry) && entry > 0) {
+        const buyGap = sideName !== 'short' && live > entry;
+        const shortGap = sideName === 'short' && live < entry;
+        if (buyGap || shortGap) {
+          const delta = live - entry;
+          fillAt = live;
+          order.entry = live;
+          if (Number(order.target) > 0) order.target = Math.round((Number(order.target) + delta) * 100) / 100;
+          if (Number(order.stop) > 0) order.stop = Math.round((Number(order.stop) + delta) * 100) / 100;
+        }
+      }
       order.status = 'open';
-      order.filled = order.entry;
+      order.filled = fillAt;
       order.routing = 'paper';
       if (typeof engine.stampSignal === 'function') engine.stampSignal(order);
       const signal = order.signalSpot > 0

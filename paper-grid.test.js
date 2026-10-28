@@ -117,6 +117,30 @@ test('paper daily max loss kills and closes open levels', () => {
   assert.equal(s.haltReason, 'Maximum loss');
 });
 
+test('paper restart with stale entry below live does not instant max-profit kill', () => {
+  const s = new Strategy({quantity: 65, maxLoss: 5000, maxProfit: 5000});
+  s.start('buy', 'paper', {scripCode: '1', label: 'NIFTY 22700 PE', optionType: 'PE', lotSize: 65}, 'existing');
+  s.inSession = () => true;
+  s.status = 'killed';
+  s.haltReason = 'Maximum profit';
+  s.realized = 7605;
+  s.manualAnchors = {PE: {price: 173.15, signalTime: 1}};
+  s.optionOrders = [{id: 9, level: 1, side: 'buy', status: 'closed', routing: 'paper', right: 'PE', entry: 173.15, filled: 173.15, exit: 174.95, quantity: 65, lotSize: 65, pnl: 7605, reason: 'Maximum profit'}];
+  const stale = [{level: 1, entry: 173.15, target: 185.15, stop: 153.15}, {level: 2, entry: 180.15, target: 192.15, stop: 160.15}];
+  const board = price => ({optionType: 'PE', side: 'buy', price, lotSize: 65, orderQuantity: 65, grid: stale, scripCode: '1', label: 'NIFTY 22700 PE'});
+  s.start('buy', 'paper', {scripCode: '1', label: 'NIFTY 22700 PE', optionType: 'PE', lotSize: 65}, 'existing');
+  assert.equal(s.status, 'running');
+  assert.equal(s.realized, 0);
+  assert.deepEqual(s.manualAnchors, {});
+  advancePaperGrid(s, board(175.05));
+  assert.equal(s.status, 'running');
+  assert.equal(s.realized, 0);
+  const open = s.orders().find(order => order.status === 'open');
+  assert.ok(open);
+  assert.equal(open.filled, 175.05);
+  assert.ok(Math.abs(s.optionPnl(175.05)) < 1);
+});
+
 test('paper start after kill reseeds a new grid', () => {
   const s = new Strategy({quantity: 1, maxLoss: 500, maxProfit: 200});
   s.start('buy', 'paper', {scripCode: '1', label: 'NIFTY', optionType: 'CE'}, 'existing');

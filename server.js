@@ -591,6 +591,12 @@ async function startStrategy(data, fresh){
     }
     lockFreeSince=null;signalAt=0;
     const result=fresh?engine.start(direction,mode,contract,tradeMode):engine.arm(direction,mode,contract,tradeMode);
+    if(mode==='paper'){
+      engine.manualAnchors={};
+      engine.gridKeys={};
+      engine.gridKey='';
+      boardDirty=true;
+    }
     if(tradeMode==='existing'&&startSignal&&!hadActive&&engine.status==='running'){
       engine.signal={...startSignal,side:direction};
       boardDirty=true;

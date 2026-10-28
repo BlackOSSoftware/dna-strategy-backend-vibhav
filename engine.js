@@ -246,7 +246,17 @@ export class Strategy {
     // Live/current-signal start drops finished rejected/closed leftovers even from idle.
     if (mode === 'live' && nextTrade === 'existing') this.optionOrders = this.orders().filter(working);
     if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
-      const keep = {config:this.config, events:this.events, history:this.history, realized:0, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}, paperHistory:this.paperHistory || []};
+      const keep = {config:this.config, events:this.events, history:this.history, realized:0, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, paperHistory:this.paperHistory || []};
+      // Fresh paper run must not keep a stale Set-entry anchor or old grid keys — that re-fills deep in profit and re-hits max profit.
+      if (mode === 'paper') {
+        keep.manualAnchors = {};
+        keep.gridKeys = {};
+        keep.gridKey = '';
+      } else {
+        keep.manualAnchors = this.manualAnchors || {};
+        keep.gridKeys = this.gridKeys || {};
+        keep.gridKey = this.gridKey || '';
+      }
       if (nextTrade === 'existing') {
         keep.option = contract || this.option;
         // Live start drops finished/rejected leftovers. Paper keeps Sharekhan rows and any still-working legs.
@@ -269,6 +279,9 @@ export class Strategy {
       this.trailAnchor = null;
       this.highWater = null;
       this.lowWater = null;
+      this.manualAnchors = {};
+      this.gridKeys = {};
+      this.gridKey = '';
     }
     return this.arm(direction, mode, nextTrade === 'live' ? null : (contract || this.option), nextTrade);
   }
