@@ -638,8 +638,13 @@ async function exitOpenOrder(data){
   const contract=contractFor(order);
   let ltp=null;
   try{ltp=(await angel.quote(contract)).price;}catch{}
+  if(!(ltp>0))ltp=Number(engine.optionPrice)||Number(order.filled)||0;
   if(!(ltp>0))throw Error('Live option price is unavailable, so the exit was not sent');
-  if(!order.brokerOrderId){engine.closeOptionOrder(order,ltp,'Manual exit');return engine.snapshot();}
+  // Paper run, or a paper-routed fill: never send an exit to Sharekhan.
+  if(engine.mode!=='live'||order.routing!=='live'||!order.brokerOrderId){
+    engine.closeOptionOrder(order,ltp,'Manual exit');
+    return engine.snapshot();
+  }
   const side=order.side==='short'?'buy':'short';
   const price=marketablePrice(ltp,side,contract?.tickSize);
   const sent=await sendLive(contract,{side,entry:price,quantity:order.quantity});
@@ -682,6 +687,7 @@ async function liveContract(contract){
   }catch{return contract;}
 }
 async function sendLive(contract, order){
+  if(engine.mode!=='live')throw Error('Paper mode is active — Sharekhan orders are blocked');
   try{
     return await submitLiveOrder({apiKey:process.env.SHAREKHAN_API_KEY,accessToken:broker.accessToken(),customerId:broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID,loginId:sharekhanLoginId(),contract:await liveContract(contract),order,productType:engine.config.productType});
   }finally{bookCache={at:0,value:null};}
@@ -856,14 +862,21 @@ async function liveOptionOrder(data){
   if(data.action==='unplace'){
     const right=String(data.right||'').toUpperCase();
     const existing=engine.orders().find(item=>(item.id===Number(data.id)||item.level===Number(data.level))&&(!right||(item.right||'CE')===right));
-    if(existing?.brokerOrderId){
+    if(existing?.brokerOrderId&&engine.mode==='live'){
       await cancelLiveOrder(existing);
+      existing.brokerOrderId='';
+      existing.routing='paper';
+    }else if(existing?.brokerOrderId&&engine.mode!=='live'){
       existing.brokerOrderId='';
       existing.routing='paper';
     }
     return engine.optionOrder(data);
   }
   if(data.action!=='place')return engine.optionOrder(data);
+  // Paper Start: grid place stays simulated — never route to Sharekhan.
+  if(engine.mode!=='live'||data.live===false){
+    return engine.optionOrder({...data,live:false});
+  }
   const accessToken=broker.accessToken();
   const customerId=broker.session?.customerId||process.env.SHAREKHAN_CUSTOMER_ID;
   const loginId=sharekhanLoginId();
