@@ -2,9 +2,15 @@ import {liveIntents, trailOpenStops} from './live-grid.js';
 
 export function seedGridOrders(engine, board) {
   const sides = board?.sides?.length ? board.sides : [board];
+  const dead = new Set(['rejected', 'cancelled', 'canceled', 'closed']);
   for (const side of sides) {
     const right = side?.optionType || 'CE';
-    if (engine.orders().some(order => (order.right || 'CE') === right && !order.parked) || !side?.grid?.length) continue;
+    // Only live draft/pending/open rows block a new seed — closed/history leftovers must not.
+    const blocked = engine.orders().some(order => {
+      if ((order.right || 'CE') !== right || order.parked) return false;
+      return !dead.has(String(order.status || '').toLowerCase());
+    });
+    if (blocked || !side?.grid?.length) continue;
     const rows = side.grid.filter(row => row.entry > 0 && row.target > 0 && row.stop > 0);
     if (!rows.length) continue;
     const made = rows.map(row => engine.draftOrder({

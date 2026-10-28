@@ -116,3 +116,20 @@ test('paper daily max loss kills and closes open levels', () => {
   assert.equal(s.status, 'killed');
   assert.equal(s.haltReason, 'Maximum loss');
 });
+
+test('paper start after kill reseeds a new grid', () => {
+  const s = new Strategy({quantity: 1, maxLoss: 500, maxProfit: 200});
+  s.start('buy', 'paper', {scripCode: '1', label: 'NIFTY', optionType: 'CE'}, 'existing');
+  s.inSession = () => true;
+  advancePaperGrid(s, boardFor(100, grid, {lotSize: 65}));
+  assert.equal(s.orders()[0].status, 'open');
+  s.markOptionPrice(110, 'CE');
+  assert.equal(s.status, 'killed');
+  s.start('buy', 'paper', {scripCode: '1', label: 'NIFTY', optionType: 'CE'}, 'existing');
+  assert.equal(s.status, 'running');
+  assert.equal(s.realized, 0);
+  assert.equal(s.orders().length, 0);
+  advancePaperGrid(s, boardFor(100, grid, {lotSize: 65}));
+  assert.ok(s.orders().some(order => order.status === 'open' || order.status === 'pending' || order.status === 'draft'));
+  assert.equal(s.status, 'running');
+});

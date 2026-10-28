@@ -345,6 +345,40 @@ test('start and stop stay available after a kill',()=>{
   assert.equal(s.status,'running');
   assert.equal(s.direction,'short');
 });
+test('paper start after max profit resets day P&L and runs again',()=>{
+  const s=new Strategy({maxLoss:500,maxProfit:200});
+  s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  s.optionOrders=[{id:1,level:1,side:'buy',status:'open',routing:'paper',right:'CE',entry:100,filled:100,quantity:1,lotSize:65,target:200,stop:10}];
+  s.markOptionPrice(110,'CE');
+  assert.equal(s.status,'killed');
+  assert.ok(s.realized>=200);
+  s.stop();
+  assert.equal(s.status,'killed');
+  const snap=s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  assert.equal(snap.status,'running');
+  assert.equal(snap.mode,'paper');
+  assert.equal(snap.pnl,0);
+  assert.equal(snap.realized,0);
+  assert.equal(snap.haltReason,null);
+  assert.equal(s.orders().length,0);
+  assert.ok((s.paperHistory||[]).length>=1);
+});
+test('paper start with open leg parks it and day P&L is 0 so max profit does not re-fire',()=>{
+  const s=new Strategy({maxLoss:5000,maxProfit:200});
+  s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  s.optionOrders=[{id:1,level:1,side:'buy',status:'open',routing:'paper',right:'CE',entry:100,filled:100,quantity:1,lotSize:65,target:200,stop:10}];
+  s.optionPrice=110;
+  s.stop();
+  assert.equal(s.status,'paused');
+  const snap=s.start('buy','paper',{scripCode:'1',label:'NIFTY',optionType:'CE'},'existing');
+  assert.equal(snap.status,'running');
+  assert.equal(snap.realized,0);
+  assert.equal(snap.pnl,0);
+  assert.equal(s.orders().filter(o=>o.status==='open').length,0);
+  s.markOptionPrice(110,'CE');
+  assert.equal(s.status,'running');
+  assert.equal(s.realized,0);
+});
 test('call and put grids keep their own step and quantity',()=>{
   const s=new Strategy();
   s.configure({optionMode:'BOTH',callGridStep:5,putGridStep:11,callQuantity:1,putQuantity:2,callTargetPoints:9,putTargetPoints:4,callInitialStop:8,putInitialStop:6});

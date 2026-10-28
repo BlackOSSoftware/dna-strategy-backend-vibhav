@@ -187,17 +187,58 @@ export class Strategy {
       throw Error('Strategy is already running; stop it before starting again');
     }
     const dead = new Set(['rejected', 'cancelled', 'canceled', 'closed']);
-    if (this.orders().length && this.orders().every(order => dead.has(String(order.status || '').toLowerCase()))) this.archivePaperOrders();
-    const brokerBusy = this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !dead.has(String(order.status || '').toLowerCase())));
-    if (nextTrade === 'live' && brokerBusy) throw Error('Close the current option orders before Live mode');
-    if (this.realized !== 0) this.log('system', `P&L reset to 0 for this run (previous ${fmt(this.realized)})`);
+    const isDead = order => dead.has(String(order.status || '').toLowerCase());
+    const working = order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !isDead(order));
+    const isBrokerOrder = order => order.routing === 'live' || !!order.brokerOrderId;
+    const isPurePaper = order => !isBrokerOrder(order);
+    if (nextTrade === 'live' && this.orders().some(order => order.status === 'open' || order.status === 'pending' || (order.brokerOrderId && !isDead(order)))) {
+      throw Error('Close the current option orders before Live mode');
+    }
+
+    // Paper Start = fresh day for local paper legs only. Soft-resume with open paper + realized=0
+    // re-hits max profit on the next tick and only "closes" — so park pure paper, keep broker rows.
+    if (mode === 'paper') {
+      const mark = this.optionPrice || this.lastPrice;
+      for (const order of this.orders()) {
+        if (!isPurePaper(order)) continue;
+        if (order.status === 'open') {
+          const px = Number(mark) > 0 ? mark : (order.filled || order.entry);
+          if (Number(px) > 0) this.closeOptionOrder(order, px, 'New paper run');
+          else { order.status = 'cancelled'; order.reason = 'New paper run'; }
+        } else if (order.status === 'pending' || order.status === 'draft') {
+          order.status = 'cancelled'; order.reason = 'New paper run';
+        }
+      }
+      this.archivePaperOrders();
+    } else if (this.orders().some(order => isPurePaper(order) && isDead(order))) {
+      this.archivePaperOrders();
+    }
+
+    const hasWorking = this.orders().some(working);
+    const previousPnL = this.realized;
     this.realized = 0;
-    if (this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade && nextTrade !== 'live') { this.mode = mode; return this.resume(); }
+    this.haltReason = null;
+    if (previousPnL !== 0) this.log('system', `P&L reset to 0 for this run (previous ${fmt(previousPnL)})`);
+
+    // Soft resume only when paused with open broker/work left — never for a fresh paper day (P&L 0 + reseed).
+    if (mode !== 'paper' && this.status === 'paused' && this.direction === direction && this.tradeMode === nextTrade && nextTrade !== 'live' && hasWorking) {
+      this.mode = mode;
+      return this.resume();
+    }
+    // Live/current-signal start drops finished rejected/closed leftovers even from idle.
+    if (mode === 'live' && nextTrade === 'existing') this.optionOrders = this.orders().filter(working);
     if (this.status !== 'idle' || this.direction || this.level || this.tradeMode !== nextTrade) {
-      const keep = {config:this.config, events:this.events, history:this.history, realized:this.realized, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}, paperHistory:this.paperHistory || []};
-      if (nextTrade === 'existing') { keep.option = contract || this.option; keep.optionOrders = this.optionOrders; }
+      const keep = {config:this.config, events:this.events, history:this.history, realized:0, candles:this.candles, lastPrice:this.lastPrice, nextId:this.nextId, optionPrice:this.optionPrice, manualAnchors:this.manualAnchors || {}, paperHistory:this.paperHistory || []};
+      if (nextTrade === 'existing') {
+        keep.option = contract || this.option;
+        // Live start drops finished/rejected leftovers. Paper keeps Sharekhan rows and any still-working legs.
+        keep.optionOrders = mode === 'paper'
+          ? this.orders().filter(order => isBrokerOrder(order) || working(order))
+          : this.orders().filter(working);
+      }
       this.reset();
       Object.assign(this, keep);
+      this.realized = 0;
     }
     return this.arm(direction, mode, nextTrade === 'live' ? null : (contract || this.option), nextTrade);
   }
@@ -205,6 +246,11 @@ export class Strategy {
     if (this.status === 'idle') return this.snapshot();
     this.pending = null;
     if (this.legs.length) this.closeAll(this.lastPrice, 'Strategy stopped');
+    // Keep killed/halted as-is so Start does a fresh run instead of a soft resume.
+    if (this.status === 'killed' || this.status === 'halted') {
+      this.log('system', `Strategy stopped · was ${this.status}${this.haltReason ? ` (${this.haltReason})` : ''}`);
+      return this.snapshot();
+    }
     this.status = 'paused';
     this.haltReason = 'Stopped';
     this.log('system','Strategy stopped');
@@ -212,16 +258,17 @@ export class Strategy {
   }
   arm(direction, mode = 'paper', contract = null, tradeMode = 'existing') {
     if (!['buy','short'].includes(direction)) throw Error('Choose buy or short');
-    if (this.status === 'killed') throw Error('Killed strategy can only reset on a new day');
     if (this.direction && this.direction !== direction) throw Error('Direction is locked for the day');
     if (this.level || this.pending) throw Error('Entry already used; no re-entry today');
     this.tradeMode = tradeMode === 'live' ? 'live' : 'existing';
     this.day = this.day || day(Date.now()); this.direction = direction; this.mode = mode;
+    this.haltReason = null;
+    this.realized = 0;
     if (this.tradeMode === 'live') { this.option = null; this.optionOrders = []; this.signal = null; this.startedAt = Date.now(); }
     else this.option = contract || this.option || null;
     this.status = 'running';
     const label = this.tradeMode === 'live' ? 'LIVE mode · waiting for the next signal' : `EXISTING mode${this.option ? ` · ${this.option.label} ${this.option.expiry}` : ''}`;
-    this.log('system',`${direction.toUpperCase()} armed in ${mode} · ${label}`); return this.snapshot();
+    this.log('system',`${direction.toUpperCase()} armed in ${mode} · ${label} · day P&L 0`); return this.snapshot();
   }
   pause() { if (this.status === 'running') { this.status = 'paused'; this.pending = null; this.log('system','Paused; pending trigger cancelled'); } return this.snapshot(); }
   resume() { if (this.status !== 'paused') throw Error('Strategy is not paused'); this.status='running'; this.haltReason=null; this.log('system','Strategy started'); return this.snapshot(); }
@@ -241,7 +288,8 @@ export class Strategy {
     const keep = [];
     const archived = [];
     for (const order of this.orders()) {
-      const paper = order.routing !== 'live';
+      // Sharekhan-linked rows stay in the working book; only local paper goes to history.
+      const paper = order.routing !== 'live' && !order.brokerOrderId;
       const match = !slot || (order.right || 'CE') === slot;
       if (paper && match && dead.has(String(order.status || '').toLowerCase())) archived.push({...order, archivedAt: Date.now()});
       else keep.push(order);
