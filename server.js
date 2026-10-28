@@ -407,6 +407,67 @@ async function brokerBook(force=false){
   await syncBookOrders(value);
   return value;
 }
+function paperOrderLabel(order){
+  const name=order.tradingSymbol||engine.option?.tradingSymbol||engine.config.symbol||'OPTION';
+  const strike=order.strike||engine.sideContracts?.[order.right||'CE']?.strike||engine.option?.strike||'';
+  const right=order.right||engine.option?.optionType||'CE';
+  return `${name} ${strike} ${right} · L${order.level}`.trim();
+}
+async function paperBook(){
+  const rows=engine.orders().filter(order=>!order.parked&&order.routing!=='live');
+  const prices={};
+  if(engine.optionPrice>0&&engine.option?.optionType)prices[engine.option.optionType]=engine.optionPrice;
+  for(const order of rows.filter(item=>item.status==='open')){
+    const right=order.right||'CE';
+    if(prices[right]>0)continue;
+    try{
+      const quote=await angel.quote(contractFor(order));
+      if(quote?.price>0)prices[right]=quote.price;
+    }catch{}
+  }
+  const orders=rows.filter(order=>order.status!=='draft').map(order=>{
+    const lot=engine.lotOf(order);
+    const units=order.quantity*lot;
+    const done=order.status==='open'||order.status==='closed'?units:0;
+    const price=order.status==='closed'?(order.exit??order.filled):order.status==='open'?(order.filled??order.entry):order.entry;
+    return {
+      orderId:`P${order.id}`,
+      symbol:paperOrderLabel(order),
+      side:order.side==='short'?'SELL':'BUY',
+      quantity:String(units),
+      filled:String(done),
+      price:price??null,
+      status:String(order.status||'').toUpperCase(),
+      reason:order.reason||order.exitReason||(order.status==='pending'?'Waiting for entry':''),
+      product:'PAPER',
+      level:order.level,
+      right:order.right||'',
+      id:order.id
+    };
+  }).reverse();
+  const positions=rows.filter(order=>order.status==='open'&&order.filled>0).map(order=>{
+    const lot=engine.lotOf(order);
+    const units=order.quantity*lot;
+    const ltp=prices[order.right||'CE']||null;
+    const pnl=ltp>0?((order.side==='buy'?ltp-order.filled:order.filled-ltp)*units):null;
+    return {
+      symbol:paperOrderLabel(order),
+      side:order.side==='short'?'SELL':'BUY',
+      quantity:String(units),
+      net:order.side==='short'?-units:units,
+      avg:order.filled,
+      ltp:ltp>0?ltp:null,
+      pnl:pnl==null?null:Math.round(pnl*100)/100,
+      product:'PAPER',
+      scripCode:order.scripCode||'',
+      level:order.level,
+      right:order.right||'',
+      id:order.id,
+      paper:true
+    };
+  });
+  return {connected:true,mode:'paper',orders,positions,profile:{},funds:null};
+}
 function positionContract(position){
   const option=position?.option;
   if(!option)return null;
@@ -851,6 +912,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/status')return reply(res,200,await verifyBroker());
     if(req.method==='GET'&&url.pathname==='/api/server-ip')return reply(res,200,await serverPublicIp());
     if(req.method==='GET'&&url.pathname==='/api/sharekhan/book')return reply(res,200,await brokerBook(url.searchParams.get('fresh')==='1'));
+    if(req.method==='GET'&&url.pathname==='/api/paper/book')return reply(res,200,await paperBook());
     if(req.method==='POST'&&url.pathname.startsWith('/api/')){
       const data=await body(req); let result;
       switch(url.pathname){
