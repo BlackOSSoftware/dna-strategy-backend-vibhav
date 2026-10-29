@@ -54,9 +54,13 @@ export function advancePaperGrid(engine, board) {
       tick: side.tickSize || engine.config.tickSize
     });
 
+    // One entry per tick — prevents stale low/high grids from opening L1–L3 in the same tick
+    // (which used to collapse into an instant shared-stop wipe).
+    let filledEntry = false;
     for (const intent of liveIntents(orders, side.price, sideName)) {
       if (intent.type !== 'entry') continue;
       if (side.manageOnly) continue;
+      if (filledEntry) break;
       const order = orders.find(item => item.level === intent.level);
       if (!order) continue;
       if (order.status !== 'draft' && order.status !== 'pending') continue;
@@ -64,8 +68,9 @@ export function advancePaperGrid(engine, board) {
       engine.optionOrder({action: 'place', level: order.level, right, live: false});
       const live = Number(side.price);
       const entry = Number(order.entry);
-      // Stale limit (entry far from live after a fresh Start) would fill deep in profit and instantly hit max profit.
-      // Rebase that fill to the live premium so the new run starts flat.
+      // Stale limit (entry far from live after a fresh Start) would fill deep in profit and
+      // instantly hit max profit / target. Fill at live so the run starts flat, and shift
+      // stop/target by the same delta — but keep planned entry so grid spacing stays visible.
       let fillAt = entry;
       if (Number.isFinite(live) && live > 0 && Number.isFinite(entry) && entry > 0) {
         const buyGap = sideName !== 'short' && live > entry;
@@ -73,7 +78,6 @@ export function advancePaperGrid(engine, board) {
         if (buyGap || shortGap) {
           const delta = live - entry;
           fillAt = live;
-          order.entry = live;
           if (Number(order.target) > 0) order.target = Math.round((Number(order.target) + delta) * 100) / 100;
           if (Number(order.stop) > 0) order.stop = Math.round((Number(order.stop) + delta) * 100) / 100;
         }
@@ -87,6 +91,7 @@ export function advancePaperGrid(engine, board) {
         : '';
       engine.log('fill', `Paper level ${right} ${order.level} filled at ${order.filled}${signal}`);
       changed = true;
+      filledEntry = true;
     }
 
     engine.markOptionPrice(side.price, right);

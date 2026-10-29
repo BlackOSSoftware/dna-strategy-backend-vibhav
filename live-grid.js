@@ -9,22 +9,27 @@ export function trailOpenStops(orders, price, {side = 'buy', trailStartLeg = 3, 
   const open = orders.filter(order => order.status === 'open' && !order.parked);
   if (!open.length || !(price > 0) || !(trailStep > 0)) return;
   const sign = side === 'short' ? -1 : 1;
+  const basisOf = order => Number(order.filled) > 0 ? Number(order.filled) : Number(order.entry);
   for (const order of open) {
     if (!(order.entry > 0) || !(order.stop > 0)) continue;
     if (order.baseStop == null) order.baseStop = order.stop;
-    const steps = Math.floor((sign * (price - order.entry)) / trailStep);
+    const steps = Math.floor((sign * (price - basisOf(order))) / trailStep);
     if (steps <= 0) continue;
     const trailed = round(order.baseStop + sign * steps * trailStep, tick);
     if (sign === 1 && trailed > order.stop) order.stop = trailed;
     if (sign === -1 && trailed < order.stop) order.stop = trailed;
   }
   if (open.length < trailStartLeg) return;
-  const first = orders.slice().sort((a, b) => a.level - b.level)[0];
+  const first = open.slice().sort((a, b) => a.level - b.level)[0];
   if (!first) return;
   if (first.trailAnchor == null) first.trailAnchor = price;
   const steps = Math.floor((sign * (price - first.trailAnchor)) / trailStep);
-  const breakeven = first.entry;
-  const trailed = steps > 0 ? round(first.entry + sign * steps * trailStep, tick) : breakeven;
+  const breakeven = basisOf(first);
+  // Snap to breakeven only while live still has room. Never pull stop onto/through live
+  // (same-tick L1–L3 fills used to set stop == live and wipe the book).
+  const clearOfStop = sign === 1 ? price > breakeven : price < breakeven;
+  if (steps <= 0 && !clearOfStop) return;
+  const trailed = steps > 0 ? round(breakeven + sign * steps * trailStep, tick) : breakeven;
   for (const order of open) {
     if (sign === 1 && trailed > order.stop) order.stop = trailed;
     if (sign === -1 && trailed < order.stop) order.stop = trailed;

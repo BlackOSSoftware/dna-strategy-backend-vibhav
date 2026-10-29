@@ -138,7 +138,62 @@ test('paper restart with stale entry below live does not instant max-profit kill
   const open = s.orders().find(order => order.status === 'open');
   assert.ok(open);
   assert.equal(open.filled, 175.05);
+  assert.equal(open.entry, 173.15);
+  assert.equal(open.target, 187.05);
+  assert.equal(open.stop, 155.05);
   assert.ok(Math.abs(s.optionPnl(175.05)) < 1);
+});
+
+test('stale low buy grid keeps spacing and does not wipe L1-L3 on one tick', () => {
+  const s = new Strategy({quantity: 1, maxLoss: 1e9, maxProfit: 1e9, trailStep: 8, trailStartLeg: 3, gridStep: 7, initialStop: 20, targetPoints: 12});
+  s.mode = 'paper';
+  s.status = 'running';
+  s.tradeMode = 'existing';
+  s.inSession = () => true;
+  const low = [
+    {level: 1, entry: 221, target: 233, stop: 201},
+    {level: 2, entry: 228, target: 240, stop: 208},
+    {level: 3, entry: 235, target: 247, stop: 221},
+    {level: 4, entry: 242, target: 254, stop: 221}
+  ];
+  advancePaperGrid(s, boardFor(243.4, low));
+  assert.equal(s.orders()[0].status, 'open');
+  assert.equal(s.orders()[0].filled, 243.4);
+  assert.equal(s.orders()[0].entry, 221);
+  assert.equal(s.orders()[1].status, 'draft');
+  assert.equal(s.orders()[1].entry, 228);
+  advancePaperGrid(s, boardFor(243.4, low));
+  advancePaperGrid(s, boardFor(243.4, low));
+  assert.equal(s.orders().filter(order => order.status === 'open').length, 3);
+  assert.ok(s.orders().every(order => order.status !== 'closed'));
+  assert.equal(s.orders()[0].entry, 221);
+  assert.equal(s.orders()[1].entry, 228);
+  assert.equal(s.orders()[2].entry, 235);
+  assert.ok(s.orders()[0].stop < 243.4);
+});
+
+test('short gap fill keeps planned entry so grid gaps stay intact', () => {
+  const s = new Strategy({quantity: 1, maxLoss: 1e9, maxProfit: 1e9, trailStep: 8, trailStartLeg: 3});
+  s.mode = 'paper';
+  s.status = 'running';
+  s.tradeMode = 'existing';
+  s.inSession = () => true;
+  const shortGrid = [
+    {level: 1, entry: 180, target: 168, stop: 200},
+    {level: 2, entry: 173, target: 161, stop: 193},
+    {level: 3, entry: 166, target: 154, stop: 186}
+  ];
+  const board = price => boardFor(price, shortGrid, {side: 'short'});
+  board(175.25).sides[0].side = 'short';
+  const b = board(175.25);
+  b.side = 'short';
+  b.sides[0].side = 'short';
+  advancePaperGrid(s, b);
+  assert.equal(s.orders()[0].status, 'open');
+  assert.equal(s.orders()[0].filled, 175.25);
+  assert.equal(s.orders()[0].entry, 180);
+  assert.equal(s.orders()[1].entry, 173);
+  assert.equal(s.orders()[1].status, 'draft');
 });
 
 test('paper start after kill reseeds a new grid', () => {

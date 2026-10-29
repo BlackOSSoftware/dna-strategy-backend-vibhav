@@ -64,6 +64,18 @@ test('an open live buy exits on the stop or target and trails after the third fi
   assert.equal(liveIntents([{...orders[0], stop:80}], 112)[0].reason, 'target');
 });
 
+test('shared trail does not snap stop onto live when three fills sit at the same price', () => {
+  const orders = [
+    {level:1, side:'buy', entry:243.4, filled:243.4, target:255.4, stop:223.4, status:'open', brokerOrderId:'1'},
+    {level:2, side:'buy', entry:242.8, filled:242.8, target:254.8, stop:222.8, status:'open', brokerOrderId:'2'},
+    {level:3, side:'buy', entry:243.2, filled:243.2, target:255.2, stop:223.2, status:'open', brokerOrderId:'3'}
+  ];
+  trailOpenStops(orders, 243.4, {trailStartLeg:3, trailStep:8});
+  assert.equal(orders[0].stop, 223.4);
+  assert.equal(orders[1].stop, 222.8);
+  assert.equal(orders[2].stop, 223.2);
+});
+
 test('a single filled level trails its stop step by step until it exits', () => {
   const orders = [
     {level:1, side:'buy', entry:100, target:130, stop:80, status:'open', brokerOrderId:'1'},
